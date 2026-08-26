@@ -7,7 +7,7 @@ document.getElementById("testar").addEventListener("click", async () => {
   try {
 
     const response = await fetch(
-      "https://api.mercadolibre.com/sites/MLB/search?q=iphone"
+      "https://api.mercadolibre.com/sites/MLB/categories"
     );
 
     if (!response.ok) {
