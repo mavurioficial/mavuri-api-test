@@ -6,92 +6,57 @@ function aplicarCors(req, res) {
     "https://mavurioficial.github.io",
     "https://mavuri-api-test.vercel.app"
   ]);
-
   if (allowedOrigins.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
   }
-
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type");
 }
 
-function send(res, status, data) {
-  res.status(status).json(data);
-}
+function send(res, status, data) { res.status(status).json(data); }
 
 async function lerResposta(response) {
   const texto = await response.text();
-  try {
-    return JSON.parse(texto);
-  } catch {
-    return {
-      message: texto || `Resposta HTTP ${response.status}`,
-      raw_response: texto
-    };
-  }
+  try { return JSON.parse(texto); }
+  catch { return { message: texto || `Resposta HTTP ${response.status}`, raw_response: texto }; }
 }
 
-function montarHeaders(req, incluirToken = false) {
+function montarHeaders(req, incluirToken = true) {
   const headers = { Accept: "application/json" };
-
-  if (incluirToken && req.headers.authorization) {
-    headers.Authorization = req.headers.authorization;
-  }
-
+  if (incluirToken && req.headers.authorization) headers.Authorization = req.headers.authorization;
   return headers;
 }
 
 function montarPermalink(itemId) {
-  return itemId
-    ? `https://produto.mercadolivre.com.br/${itemId}`
-    : null;
+  return itemId ? `https://produto.mercadolivre.com.br/${itemId}` : null;
 }
 
-async function buscarItem(itemId) {
+async function buscarItem(req, itemId) {
   if (!itemId) return null;
-
   try {
-    const response = await fetch(
-      `${MeliApi}/items/${encodeURIComponent(itemId)}`,
-      { headers: { Accept: "application/json" } }
-    );
-
+    const response = await fetch(`${MeliApi}/items/${encodeURIComponent(itemId)}`, {
+      headers: montarHeaders(req, true)
+    });
     const data = await lerResposta(response);
     return response.ok ? data : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-async function buscarDescricao(itemId) {
+async function buscarDescricao(req, itemId) {
   if (!itemId) return "";
-
   try {
-    const response = await fetch(
-      `${MeliApi}/items/${encodeURIComponent(itemId)}/description`,
-      { headers: { Accept: "application/json" } }
-    );
-
+    const response = await fetch(`${MeliApi}/items/${encodeURIComponent(itemId)}/description`, {
+      headers: montarHeaders(req, true)
+    });
     const data = await lerResposta(response);
     if (!response.ok || !data || typeof data !== "object") return "";
-
-    return String(
-      data.plain_text ||
-      data.text ||
-      data.description ||
-      ""
-    ).trim();
-  } catch {
-    return "";
-  }
+    return String(data.plain_text || data.text || data.description || "").trim();
+  } catch { return ""; }
 }
 
 function descricaoCurta(texto, max = 320) {
-  const limpa = String(texto || "")
-    .replace(/\s+/g, " ")
-    .trim();
-
+  const limpa = String(texto || "").replace(/\s+/g, " ").trim();
   if (!limpa) return "";
   return limpa.length <= max ? limpa : `${limpa.slice(0, max).trim()}…`;
 }
@@ -100,61 +65,20 @@ function normalizarItem(item, fallback = {}, description = "") {
   const installments = item?.installments || fallback?.installments || {};
   const pictures = item?.pictures || fallback?.pictures || [];
   const itemId = item?.id || fallback?.id || fallback?.item_id || null;
-  const fallbackInstallments =
-    fallback?.installments && typeof fallback.installments === "object"
-      ? fallback.installments
-      : {};
-
+  const fallbackInstallments = fallback?.installments && typeof fallback.installments === "object" ? fallback.installments : {};
   return {
     id: itemId,
-    title:
-      item?.title ||
-      item?.name ||
-      fallback?.title ||
-      fallback?.name ||
-      itemId ||
-      "Produto sem nome",
-    description:
-      descricaoCurta(description) ||
-      item?.subtitle ||
-      item?.short_description ||
-      fallback?.description ||
-      "",
-    price:
-      item?.price ??
-      fallback?.price ??
-      fallback?.current_price ??
-      fallback?.sale_price ??
-      null,
+    title: item?.title || item?.name || fallback?.title || fallback?.name || itemId || "Produto sem nome",
+    description: descricaoCurta(description) || item?.subtitle || item?.short_description || fallback?.description || "",
+    price: item?.price ?? fallback?.price ?? fallback?.current_price ?? fallback?.sale_price ?? null,
     currency_id: item?.currency_id || fallback?.currency_id || "BRL",
-    original_price:
-      item?.original_price ??
-      fallback?.original_price ??
-      fallback?.previous_price ??
-      fallback?.list_price ??
-      null,
-    permalink:
-      item?.permalink ||
-      fallback?.permalink ||
-      montarPermalink(itemId),
-    thumbnail:
-      item?.thumbnail ||
-      pictures?.[0]?.url ||
-      fallback?.thumbnail ||
-      null,
+    original_price: item?.original_price ?? fallback?.original_price ?? fallback?.previous_price ?? fallback?.list_price ?? null,
+    permalink: item?.permalink || fallback?.permalink || montarPermalink(itemId),
+    thumbnail: item?.thumbnail || pictures?.[0]?.url || fallback?.thumbnail || null,
     installments: {
-      quantity:
-        installments?.quantity ??
-        fallbackInstallments?.quantity ??
-        0,
-      amount:
-        installments?.amount ??
-        fallbackInstallments?.amount ??
-        0,
-      rate:
-        installments?.rate ??
-        fallbackInstallments?.rate ??
-        0
+      quantity: installments?.quantity ?? fallbackInstallments?.quantity ?? 0,
+      amount: installments?.amount ?? fallbackInstallments?.amount ?? 0,
+      rate: installments?.rate ?? fallbackInstallments?.rate ?? 0
     },
     seller_id: item?.seller_id || fallback?.seller_id || null,
     category_id: item?.category_id || fallback?.category_id || null,
@@ -162,67 +86,38 @@ function normalizarItem(item, fallback = {}, description = "") {
   };
 }
 
-async function enriquecerResultados(results) {
-  const enriquecidos = await Promise.all(
-    results.map(async resultado => {
-      const itemId =
-        resultado.id ||
-        resultado.item_id ||
-        resultado.buy_box_winner?.item_id;
-
-      const [item, description] = await Promise.all([
-        buscarItem(itemId),
-        buscarDescricao(itemId)
-      ]);
-
-      return normalizarItem(item, resultado, description);
-    })
-  );
-
-  return enriquecidos;
+async function enriquecerResultados(req, results) {
+  return Promise.all(results.map(async resultado => {
+    const itemId = resultado.id || resultado.item_id || resultado.buy_box_winner?.item_id;
+    const [item, description] = await Promise.all([
+      buscarItem(req, itemId),
+      buscarDescricao(req, itemId)
+    ]);
+    return normalizarItem(item, resultado, description);
+  }));
 }
 
 async function buscarCatalogo(req, q, limit) {
-  if (!req.headers.authorization || !q) {
-    return null;
-  }
-
+  if (!req.headers.authorization || !q) return null;
   const url = new URL(`${MeliApi}/products/search`);
   url.searchParams.set("status", "active");
   url.searchParams.set("site_id", "MLB");
   url.searchParams.set("q", q);
   url.searchParams.set("limit", String(Math.min(limit, 20)));
-
-  const response = await fetch(url, {
-    headers: montarHeaders(req, true)
-  });
+  const response = await fetch(url, { headers: montarHeaders(req, true) });
   const data = await lerResposta(response);
-
-  if (!response.ok) {
-    return { response, data };
-  }
-
+  if (!response.ok) return { response, data };
   const produtos = Array.isArray(data.results) ? data.results : [];
-
-  const detalhados = await Promise.all(
-    produtos.slice(0, limit).map(async produto => {
-      try {
-        const detalheResponse = await fetch(
-          `${MeliApi}/products/${encodeURIComponent(produto.id)}`,
-          { headers: montarHeaders(req, true) }
-        );
-        const detalhe = await lerResposta(detalheResponse);
-        return detalheResponse.ok ? detalhe : produto;
-      } catch {
-        return produto;
-      }
-    })
-  );
-
+  const detalhados = await Promise.all(produtos.slice(0, limit).map(async produto => {
+    try {
+      const detalheResponse = await fetch(`${MeliApi}/products/${encodeURIComponent(produto.id)}`, { headers: montarHeaders(req, true) });
+      const detalhe = await lerResposta(detalheResponse);
+      return detalheResponse.ok ? detalhe : produto;
+    } catch { return produto; }
+  }));
   const resultadosBase = detalhados.map(produto => {
     const winner = produto.buy_box_winner || {};
     const itemId = winner.item_id || produto.id;
-
     return {
       id: itemId,
       catalog_product_id: produto.id,
@@ -231,167 +126,79 @@ async function buscarCatalogo(req, q, limit) {
       price: winner.price ?? produto.price ?? null,
       currency_id: winner.currency_id || produto.currency_id || "BRL",
       original_price: winner.original_price ?? produto.original_price ?? null,
-      permalink:
-        produto.permalink ||
-        winner.permalink ||
-        montarPermalink(winner.item_id),
-      thumbnail:
-        produto.pictures?.[0]?.url ||
-        produto.thumbnail ||
-        null,
+      permalink: produto.permalink || winner.permalink || montarPermalink(winner.item_id),
+      thumbnail: produto.pictures?.[0]?.url || produto.thumbnail || null,
       installments: winner.installments || produto.installments || {},
       shipping: winner.shipping || produto.shipping || {},
       category_id: winner.category_id || produto.category_id || null,
       seller_id: winner.seller_id || produto.seller_id || null
     };
   });
-
-  const results = await enriquecerResultados(resultadosBase);
-
-  return {
-    response,
-    data: {
-      ...data,
-      results,
-      search_source: "catalog_fallback"
-    }
-  };
+  const results = await enriquecerResultados(req, resultadosBase);
+  return { response, data: { ...data, results, search_source: "catalog_fallback" } };
 }
 
 async function buscarGeral(req, limit) {
   const termos = ["oferta", "promoção", "desconto", "mais vendidos"];
   const porTermo = Math.max(1, Math.ceil(limit / termos.length));
   const unicos = new Map();
-
   for (const termo of termos) {
     const url = new URL(`${MeliApi}/sites/MLB/search`);
     url.searchParams.set("q", termo);
     url.searchParams.set("limit", String(Math.min(porTermo, 20)));
-
-    const response = await fetch(url, {
-      headers: montarHeaders(req, false)
-    });
+    const response = await fetch(url, { headers: montarHeaders(req, true) });
     const data = await lerResposta(response);
-
     if (response.ok) {
-      for (const item of Array.isArray(data.results) ? data.results : []) {
-        if (item?.id && !unicos.has(item.id)) unicos.set(item.id, item);
-      }
-      continue;
-    }
-
-    if (response.status === 403) {
+      for (const item of Array.isArray(data.results) ? data.results : []) if (item?.id && !unicos.has(item.id)) unicos.set(item.id, item);
+    } else if (response.status === 403) {
       const fallback = await buscarCatalogo(req, termo, porTermo);
-      if (fallback?.response?.ok) {
-        for (const item of fallback.data.results || []) {
-          if (item?.id && !unicos.has(item.id)) unicos.set(item.id, item);
-        }
-      }
+      if (fallback?.response?.ok) for (const item of fallback.data.results || []) if (item?.id && !unicos.has(item.id)) unicos.set(item.id, item);
     }
-
     if (unicos.size >= limit) break;
   }
-
   const base = Array.from(unicos.values()).slice(0, limit);
-  const results = await enriquecerResultados(base);
-
-  return {
-    results,
-    paging: { total: results.length, offset: 0, limit },
-    search_source: "general_search"
-  };
+  const results = await enriquecerResultados(req, base);
+  return { results, paging: { total: results.length, offset: 0, limit }, search_source: "general_search" };
 }
 
 export default async function handler(req, res) {
   aplicarCors(req, res);
-
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
+  if (req.method === "OPTIONS") return res.status(204).end();
   try {
     const action = String(req.query?.action || "").toLowerCase();
-
     if (action === "me") {
-      if (!req.headers.authorization) {
-        return send(res, 401, { message: "Access Token não informado." });
-      }
-
-      const response = await fetch(`${MeliApi}/users/me`, {
-        headers: montarHeaders(req, true)
-      });
-      const data = await lerResposta(response);
-      return send(res, response.status, data);
+      if (!req.headers.authorization) return send(res, 401, { message: "Access Token não informado." });
+      const response = await fetch(`${MeliApi}/users/me`, { headers: montarHeaders(req, true) });
+      return send(res, response.status, await lerResposta(response));
     }
-
     if (action === "search") {
+      if (!req.headers.authorization) return send(res, 401, { message: "Access Token não informado." });
       const q = String(req.query?.q || "").trim();
       const requestedLimit = Number.parseInt(req.query?.limit || "20", 10);
-      const limit = Math.min(
-        Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 20, 1),
-        50
-      );
-
-      if (!q) {
-        const geral = await buscarGeral(req, limit);
-        return send(res, 200, geral);
-      }
-
+      const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 20, 1), 50);
+      if (!q) return send(res, 200, await buscarGeral(req, limit));
       const url = new URL(`${MeliApi}/sites/MLB/search`);
       url.searchParams.set("q", q);
       url.searchParams.set("limit", String(limit));
-
-      const response = await fetch(url, {
-        headers: montarHeaders(req, false)
-      });
+      const response = await fetch(url, { headers: montarHeaders(req, true) });
       const data = await lerResposta(response);
-
       if (response.ok) {
-        const results = await enriquecerResultados(
-          Array.isArray(data.results) ? data.results : []
-        );
-        return send(res, response.status, { ...data, results });
+        const results = await enriquecerResultados(req, Array.isArray(data.results) ? data.results : []);
+        return send(res, response.status, { ...data, results, search_source: "authenticated_search" });
       }
-
-      if (response.status !== 403) {
-        return send(res, response.status, data);
-      }
-
+      if (response.status !== 403) return send(res, response.status, data);
       const fallback = await buscarCatalogo(req, q, limit);
-
-      if (fallback?.response?.ok) {
-        return send(res, 200, fallback.data);
-      }
-
-      return send(res, response.status, {
-        ...data,
-        catalog_fallback: fallback?.data || null
-      });
+      if (fallback?.response?.ok) return send(res, 200, fallback.data);
+      return send(res, response.status, { ...data, catalog_fallback: fallback?.data || null });
     }
-
     if (action === "categories") {
-      if (!req.headers.authorization) {
-        return send(res, 401, { message: "Access Token não informado." });
-      }
-
-      const response = await fetch(`${MeliApi}/sites/MLB/categories`, {
-        headers: montarHeaders(req, true)
-      });
-
-      const data = await lerResposta(response);
-      return send(res, response.status, data);
+      if (!req.headers.authorization) return send(res, 401, { message: "Access Token não informado." });
+      const response = await fetch(`${MeliApi}/sites/MLB/categories`, { headers: montarHeaders(req, true) });
+      return send(res, response.status, await lerResposta(response));
     }
-
-    return send(res, 400, {
-      message: "Ação inválida.",
-      actions: ["me", "search", "categories"]
-    });
+    return send(res, 400, { message: "Ação inválida.", actions: ["me", "search", "categories"] });
   } catch (error) {
     console.error("Erro no proxy Mercado Livre:", error);
-
-    return send(res, 500, {
-      message: "Erro interno ao consultar a API do Mercado Livre.",
-      error: error instanceof Error ? error.message : String(error)
-    });
+    return send(res, 500, { message: "Erro interno ao consultar a API do Mercado Livre.", error: error instanceof Error ? error.message : String(error) });
   }
 }
