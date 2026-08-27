@@ -1,5 +1,6 @@
 const API_BASE = "https://mavuri-api-test.vercel.app/api/meli";
-const APP_VERSION = "2026.08.27.06";
+const DIAGNOSTIC_API_BASE = "https://mavuri-api-test.vercel.app/api/diagnostic";
+const APP_VERSION = "2026.08.27.07";
 let accessToken = "";
 const resultado = document.getElementById("resultado");
 
@@ -33,8 +34,8 @@ async function lerResposta(response) {
   catch { return { resposta_texto: texto }; }
 }
 
-async function chamarApi(path, options = {}) {
-  const response = await fetch(API_BASE + path, { cache: "no-store", ...options });
+async function chamarUrl(url, options = {}) {
+  const response = await fetch(url, { cache: "no-store", ...options });
   const data = await lerResposta(response);
   if (!response.ok) {
     const erro = new Error(data?.message || "A API retornou HTTP " + response.status);
@@ -44,6 +45,10 @@ async function chamarApi(path, options = {}) {
     throw erro;
   }
   return data;
+}
+
+async function chamarApi(path, options = {}) {
+  return chamarUrl(API_BASE + path, options);
 }
 
 document.getElementById("salvarToken").addEventListener("click", () => {
@@ -103,9 +108,9 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
 
 document.getElementById("diagnosticarBusca").addEventListener("click", async () => {
   const busca = document.getElementById("busca").value.trim() || "tv";
-  resultado.textContent = "Testando busca, produto de catálogo e publicação real...";
+  resultado.textContent = "APP .07: testando 5 produtos de catálogo e o pipeline completo de anúncio real...";
   try {
-    const data = await chamarApi("?action=diagnostic&q=" + encodeURIComponent(busca), { headers: headersComToken() });
+    const data = await chamarUrl(DIAGNOSTIC_API_BASE + "?q=" + encodeURIComponent(busca), { headers: headersComToken() });
     mostrar("DIAGNÓSTICO COMPARATIVO DA BUSCA — APP " + APP_VERSION, data);
   } catch (erro) {
     mostrarErro("ERRO NO DIAGNÓSTICO", erro);
