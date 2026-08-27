@@ -1,4 +1,4 @@
-const API_BASE = "/api/meli2";
+const API_BASE = "https://mavuri-api-test.vercel.app/api/meli2";
 let accessToken = "";
 const resultado = document.getElementById("resultado");
 
@@ -98,7 +98,7 @@ document.getElementById("diagnosticarBusca").addEventListener("click", async () 
   const busca = document.getElementById("busca").value.trim() || "tv";
   resultado.textContent = "Comparando busca pública, busca autenticada e catálogo...";
   try {
-    const response = await fetch("/api/debug?q=" + encodeURIComponent(busca), { headers: headersComToken(), cache: "no-store" });
+    const response = await fetch("https://mavuri-api-test.vercel.app/api/debug?q=" + encodeURIComponent(busca), { headers: headersComToken(), cache: "no-store" });
     const data = await lerResposta(response);
     mostrar("DIAGNÓSTICO COMPARATIVO DA BUSCA", data);
   } catch (erro) {
