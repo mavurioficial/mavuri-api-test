@@ -119,11 +119,25 @@ function normalize(item, product, offer, priceInfo, description = "") {
   };
 }
 
+async function enrichMarketplaceItem(req, searchItem) {
+  const itemId = searchItem?.id;
+  if (!itemId) return normalize(searchItem, null, null, null);
+
+  // A busca pode retornar anúncios de catálogo com price=null. Consultamos o anúncio
+  // individual e os endpoints de preço para devolver um valor utilizável ao frontend.
+  const [itemResult, priceInfo] = await Promise.all([
+    meli(req, `${MeliApi}/items/${encodeURIComponent(itemId)}`, true),
+    resolveItemPrice(req, itemId, searchItem)
+  ]);
+
+  const item = itemResult.response.ok ? itemResult.data : searchItem;
+  return normalize(item, null, null, priceInfo);
+}
+
 async function enrichCatalogProduct(req, product) {
   const productId = product?.id || product?.catalog_product_id;
   if (!productId) return normalize(null, product, null, null);
 
-  // Um produto de catálogo não é um anúncio. Primeiro buscamos os anúncios/ofertas ligados à PDP.
   const offersResult = await meli(req, `${MeliApi}/products/${encodeURIComponent(productId)}/items`, true);
   const offers = offersResult.response.ok && Array.isArray(offersResult.data?.results) ? offersResult.data.results : [];
 
@@ -188,12 +202,15 @@ async function publicSearch(req, q, limit) {
 async function search(req, q, limit) {
   const direct = await publicSearch(req, q, limit);
   if (direct.response.ok && Array.isArray(direct.data?.results) && direct.data.results.length) {
+    const raw = direct.data.results;
+    const settled = await Promise.allSettled(raw.map(item => enrichMarketplaceItem(req, item)));
+    const results = settled.map((r, i) => r.status === "fulfilled" ? r.value : normalize(raw[i], null, null, null));
     return {
       ok: true,
       data: {
         paging: direct.data.paging,
-        results: direct.data.results,
-        search_source: "marketplace_search"
+        results,
+        search_source: "marketplace_search_enriched"
       }
     };
   }
