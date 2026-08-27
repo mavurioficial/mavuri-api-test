@@ -21,8 +21,6 @@ function montarHeaders(req, incluirToken = false) {
     Accept: "application/json"
   };
 
-  // O token só é necessário nas rotas autenticadas. Enviá-lo para a busca
-  // pública pode fazer a API do Mercado Livre rejeitar a chamada com 403.
   if (incluirToken && req.headers.authorization) {
     headers.Authorization = req.headers.authorization;
   }
@@ -66,8 +64,8 @@ export default async function handler(req, res) {
       url.searchParams.set("q", q);
       url.searchParams.set("limit", String(limit));
 
-      // A busca de produtos é pública. Não repassamos o token do usuário,
-      // pois ele já foi validado separadamente em /users/me e pode causar 403.
+      // A busca de produtos permanece sem token: o Mercado Livre passou a
+      // rejeitar essa chamada quando o token é repassado pelo proxy.
       const response = await fetch(url, {
         headers: montarHeaders(req, false)
       });
@@ -76,8 +74,17 @@ export default async function handler(req, res) {
     }
 
     if (action === "categories") {
+      // Mantém o token do usuário nesta rota. A resposta de 403 exibida pelo
+      // Mercado Livre (PolicyAgent / UNAUTHORIZED) começou após a remoção do
+      // Authorization desta chamada, enquanto /users/me continua válido.
+      if (!req.headers.authorization) {
+        return send(res, 401, {
+          message: "Access Token não informado."
+        });
+      }
+
       const response = await fetch(`${MeliApi}/sites/MLB/categories`, {
-        headers: montarHeaders(req, false)
+        headers: montarHeaders(req, true)
       });
 
       const data = await lerResposta(response);
