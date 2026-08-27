@@ -146,6 +146,74 @@ async function enrich(req, results) {
   return settled.map((result, index) => result.status === "fulfilled" ? result.value : normalize(null, results[index]));
 }
 
+function chooseCatalogOffer(results) {
+  if (!Array.isArray(results) || results.length === 0) return null;
+  const withPrice = results.filter(offer => Number.isFinite(Number(offer?.price)) && itemIdOf(offer));
+  if (withPrice.length > 0) {
+    return [...withPrice].sort((a, b) => Number(a.price) - Number(b.price))[0];
+  }
+  return results.find(offer => itemIdOf(offer)) || null;
+}
+
+async function resolveCatalogOffer(req, product) {
+  const productId = product?.id;
+  if (!productId || !req.headers.authorization) return null;
+
+  const url = new URL(`${MeliApi}/products/${encodeURIComponent(productId)}/items`);
+  url.searchParams.set("limit", "20");
+  const { response, data } = await meliFetch(req, url.toString(), { useAuth: true, publicFallback: false });
+  if (!response.ok) return null;
+
+  const offer = chooseCatalogOffer(data?.results);
+  if (!offer) return null;
+  return { offer, total: data?.paging?.total ?? data?.results?.length ?? 0 };
+}
+
+async function enrichCatalogOne(req, product) {
+  const resolved = await resolveCatalogOffer(req, product);
+  if (!resolved?.offer) {
+    return {
+      ...normalize(null, product),
+      catalog_product_id: product?.id || null,
+      catalog_offer_found: false,
+      raw_source: "catalog_product_without_offer"
+    };
+  }
+
+  const offer = resolved.offer;
+  const itemId = itemIdOf(offer);
+  const fallback = {
+    ...product,
+    ...offer,
+    id: itemId,
+    item_id: itemId,
+    catalog_product_id: product?.id || null,
+    title: product?.name || product?.title || offer?.title,
+    thumbnail: product?.thumbnail || product?.secure_thumbnail || offer?.thumbnail || null,
+    pictures: product?.pictures || offer?.pictures || [],
+    price: offer?.price ?? null,
+    original_price: offer?.original_price ?? offer?.regular_amount ?? null,
+    currency_id: offer?.currency_id || product?.currency_id || "BRL"
+  };
+
+  const enriched = await enrichOne(req, fallback);
+  return {
+    ...enriched,
+    catalog_product_id: product?.id || null,
+    catalog_offer_found: true,
+    catalog_offer_count: resolved.total,
+    catalog_offer_price: Number.isFinite(Number(offer?.price)) ? Number(offer.price) : null,
+    raw_source: enriched.raw_source === "item" ? "catalog_product_to_item" : "catalog_offer"
+  };
+}
+
+async function enrichCatalog(req, results) {
+  const settled = await Promise.allSettled(results.map(product => enrichCatalogOne(req, product)));
+  return settled.map((result, index) => result.status === "fulfilled"
+    ? result.value
+    : { ...normalize(null, results[index]), catalog_product_id: results[index]?.id || null, catalog_offer_found: false, raw_source: "catalog_enrichment_failed" });
+}
+
 async function publicSearch(req, q, limit) {
   const url = new URL(`${MeliApi}/sites/MLB/search`);
   if (q) url.searchParams.set("q", q);
@@ -173,14 +241,34 @@ async function diagnostic(req, q) {
     { name: "products_search_authenticated", url: `${MeliApi}/products/search?status=active&site_id=MLB&q=${encodeURIComponent(term)}&limit=2`, useAuth: true, requiresAuth: true }
   ];
   const results = [];
+  let firstCatalogProduct = null;
   for (const test of tests) {
     if (test.requiresAuth && !req.headers.authorization) {
       results.push({ name: test.name, skipped: true, reason: "Authorization não informado", url: test.url });
       continue;
     }
     const { response, data } = await meliFetch(req, test.url, { useAuth: test.useAuth, publicFallback: false });
+    if (test.name === "products_search_authenticated" && response.ok && Array.isArray(data?.results)) firstCatalogProduct = data.results[0] || null;
     results.push({ name: test.name, url: test.url, authenticated: test.useAuth && Boolean(req.headers.authorization), status: response.status, ok: response.ok, result_count: Array.isArray(data?.results) ? data.results.length : null, error: response.ok ? null : data });
   }
+
+  if (firstCatalogProduct?.id && req.headers.authorization) {
+    const url = `${MeliApi}/products/${encodeURIComponent(firstCatalogProduct.id)}/items?limit=2`;
+    const { response, data } = await meliFetch(req, url, { useAuth: true, publicFallback: false });
+    const offer = chooseCatalogOffer(data?.results);
+    results.push({
+      name: "catalog_product_items_authenticated",
+      url,
+      authenticated: true,
+      product_id: firstCatalogProduct.id,
+      status: response.status,
+      ok: response.ok,
+      result_count: Array.isArray(data?.results) ? data.results.length : null,
+      sample_offer: offer ? { item_id: itemIdOf(offer), price: offer.price ?? null, currency_id: offer.currency_id || null } : null,
+      error: response.ok ? null : data
+    });
+  }
+
   return { query: term, has_authorization: Boolean(req.headers.authorization), results };
 }
 
@@ -191,7 +279,16 @@ async function searchWithFallback(req, q, limit) {
 
   const fallback = await catalogSearch(req, q, limit);
   const catalogResults = fallback.response.ok && Array.isArray(fallback.data?.results) ? fallback.data.results : [];
-  if (catalogResults.length > 0) return { ok: true, data: { paging: fallback.data?.paging || { total: catalogResults.length, offset: 0, limit }, results: await enrich(req, catalogResults), search_source: "catalog_search_with_item_and_price_enrichment" } };
+  if (catalogResults.length > 0) {
+    return {
+      ok: true,
+      data: {
+        paging: fallback.data?.paging || { total: catalogResults.length, offset: 0, limit },
+        results: await enrichCatalog(req, catalogResults),
+        search_source: "catalog_search_product_to_real_item_offer_enrichment"
+      }
+    };
+  }
 
   if (first.response.ok) return { ok: true, data: { ...first.data, results: [], search_source: "public_empty_and_catalog_empty" } };
   return { ok: false, status: first.response.status, data: { ...first.data, catalog_fallback: fallback.data || null, diagnostic: { public_status: first.response.status, catalog_status: fallback.response.status || null } } };
@@ -207,7 +304,7 @@ async function generalSearch(req, limit) {
     if (unique.size >= limit) break;
   }
   const results = Array.from(unique.values()).slice(0, limit);
-  return { results, paging: { total: results.length, offset: 0, limit }, search_source: "general_search_with_catalog_fallback" };
+  return { results, paging: { total: results.length, offset: 0, limit }, search_source: "general_search_with_catalog_product_to_item_fallback" };
 }
 
 export default async function handler(req, res) {
