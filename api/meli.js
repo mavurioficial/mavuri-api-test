@@ -16,12 +16,14 @@ async function lerResposta(response) {
   }
 }
 
-function montarHeaders(req) {
+function montarHeaders(req, incluirToken = false) {
   const headers = {
     Accept: "application/json"
   };
 
-  if (req.headers.authorization) {
+  // O token só é necessário nas rotas autenticadas. Enviá-lo para a busca
+  // pública pode fazer a API do Mercado Livre rejeitar a chamada com 403.
+  if (incluirToken && req.headers.authorization) {
     headers.Authorization = req.headers.authorization;
   }
 
@@ -31,7 +33,6 @@ function montarHeaders(req) {
 export default async function handler(req, res) {
   try {
     const action = String(req.query?.action || "").toLowerCase();
-    const headers = montarHeaders(req);
 
     if (action === "me") {
       if (!req.headers.authorization) {
@@ -40,7 +41,9 @@ export default async function handler(req, res) {
         });
       }
 
-      const response = await fetch(`${MeliApi}/users/me`, { headers });
+      const response = await fetch(`${MeliApi}/users/me`, {
+        headers: montarHeaders(req, true)
+      });
       const data = await lerResposta(response);
       return send(res, response.status, data);
     }
@@ -63,14 +66,18 @@ export default async function handler(req, res) {
       url.searchParams.set("q", q);
       url.searchParams.set("limit", String(limit));
 
-      const response = await fetch(url, { headers });
+      // A busca de produtos é pública. Não repassamos o token do usuário,
+      // pois ele já foi validado separadamente em /users/me e pode causar 403.
+      const response = await fetch(url, {
+        headers: montarHeaders(req, false)
+      });
       const data = await lerResposta(response);
       return send(res, response.status, data);
     }
 
     if (action === "categories") {
       const response = await fetch(`${MeliApi}/sites/MLB/categories`, {
-        headers
+        headers: montarHeaders(req, false)
       });
 
       const data = await lerResposta(response);
