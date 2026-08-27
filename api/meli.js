@@ -28,6 +28,79 @@ function montarHeaders(req, incluirToken = false) {
   return headers;
 }
 
+async function buscarCatalogo(req, q, limit) {
+  if (!req.headers.authorization) {
+    return null;
+  }
+
+  const url = new URL(`${MeliApi}/products/search`);
+  url.searchParams.set("status", "active");
+  url.searchParams.set("site_id", "MLB");
+  url.searchParams.set("q", q);
+  url.searchParams.set("limit", String(Math.min(limit, 20)));
+
+  const response = await fetch(url, {
+    headers: montarHeaders(req, true)
+  });
+  const data = await lerResposta(response);
+
+  if (!response.ok) {
+    return { response, data };
+  }
+
+  const produtos = Array.isArray(data.results) ? data.results : [];
+
+  const detalhados = await Promise.all(
+    produtos.slice(0, limit).map(async produto => {
+      try {
+        const detalheResponse = await fetch(
+          `${MeliApi}/products/${encodeURIComponent(produto.id)}`,
+          { headers: montarHeaders(req, true) }
+        );
+        const detalhe = await lerResposta(detalheResponse);
+        return detalheResponse.ok ? detalhe : produto;
+      } catch {
+        return produto;
+      }
+    })
+  );
+
+  const results = detalhados.map(produto => {
+    const winner = produto.buy_box_winner || {};
+    const itemId = winner.item_id || produto.id;
+
+    return {
+      id: itemId,
+      catalog_product_id: produto.id,
+      title: produto.name || produto.title || produto.id,
+      price: winner.price ?? produto.price ?? null,
+      currency_id: winner.currency_id || produto.currency_id || "BRL",
+      original_price: winner.original_price ?? produto.original_price ?? null,
+      permalink:
+        produto.permalink ||
+        (winner.item_id
+          ? `https://produto.mercadolivre.com.br/${winner.item_id}`
+          : null),
+      thumbnail:
+        produto.pictures?.[0]?.url ||
+        produto.thumbnail ||
+        null,
+      shipping: winner.shipping || produto.shipping || {},
+      category_id: winner.category_id || produto.category_id || null,
+      seller_id: winner.seller_id || produto.seller_id || null
+    };
+  });
+
+  return {
+    response,
+    data: {
+      ...data,
+      results,
+      search_source: "catalog_fallback"
+    }
+  };
+}
+
 export default async function handler(req, res) {
   try {
     const action = String(req.query?.action || "").toLowerCase();
@@ -64,19 +137,32 @@ export default async function handler(req, res) {
       url.searchParams.set("q", q);
       url.searchParams.set("limit", String(limit));
 
-      // A busca de produtos permanece sem token: o Mercado Livre passou a
-      // rejeitar essa chamada quando o token é repassado pelo proxy.
+      // O endpoint público /sites/MLB/search vem retornando 403 para algumas
+      // aplicações mesmo sem Authorization. Primeiro preservamos a busca
+      // tradicional; somente em caso de 403 usamos o buscador oficial de
+      // produtos de catálogo como fallback autenticado.
       const response = await fetch(url, {
         headers: montarHeaders(req, false)
       });
       const data = await lerResposta(response);
-      return send(res, response.status, data);
+
+      if (response.status !== 403) {
+        return send(res, response.status, data);
+      }
+
+      const fallback = await buscarCatalogo(req, q, limit);
+
+      if (fallback?.response?.ok) {
+        return send(res, 200, fallback.data);
+      }
+
+      return send(res, response.status, {
+        ...data,
+        catalog_fallback: fallback?.data || null
+      });
     }
 
     if (action === "categories") {
-      // Mantém o token do usuário nesta rota. A resposta de 403 exibida pelo
-      // Mercado Livre (PolicyAgent / UNAUTHORIZED) começou após a remoção do
-      // Authorization desta chamada, enquanto /users/me continua válido.
       if (!req.headers.authorization) {
         return send(res, 401, {
           message: "Access Token não informado."
