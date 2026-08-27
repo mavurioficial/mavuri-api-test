@@ -1,5 +1,5 @@
 const API_BASE = "https://mavuri-api-test.vercel.app/api/meli";
-const APP_VERSION = "2026.08.27.04";
+const APP_VERSION = "2026.08.27.05";
 let accessToken = "";
 const resultado = document.getElementById("resultado");
 
@@ -85,11 +85,12 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
     resultado.textContent = "Digite algo para pesquisar.";
     return;
   }
-  resultado.textContent = "Buscando produtos e enriquecendo preços pelo backend...";
+  resultado.textContent = "Buscando catálogo e convertendo produtos em anúncios reais com preço...";
   try {
     const data = await chamarApi("?action=search&q=" + encodeURIComponent(busca) + "&limit=20", { headers: headersComToken() });
     const produtos = (data.results || []).map(item => ({
       id: item.id,
+      catalog_product_id: item.catalog_product_id || null,
       titulo: item.title,
       preco: item.price,
       moeda: item.currency_id,
@@ -112,7 +113,7 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
 
 document.getElementById("diagnosticarBusca").addEventListener("click", async () => {
   const busca = document.getElementById("busca").value.trim() || "tv";
-  resultado.textContent = "Comparando busca pública, autenticada e catálogo...";
+  resultado.textContent = "Comparando busca pública, autenticada, catálogo e ofertas reais...";
   try {
     const data = await chamarApi("?action=diagnostic&q=" + encodeURIComponent(busca), { headers: headersComToken() });
     mostrar("DIAGNÓSTICO COMPARATIVO DA BUSCA — APP " + APP_VERSION, data);
