@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Mavuri - OAuth Mercado Livre</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 30px;
+    }
+
+    button {
+      padding: 14px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    pre {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f2f2f2;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>Teste OAuth - Mercado Livre</h1>
+
+  <button id="autorizar">
+    AUTORIZAR NO MERCADO LIVRE
+  </button>
+
+  <pre id="resultado">Aguardando...</pre>
+
+  <script>
+    const CLIENT_ID = "5924820566877538";
+    const REDIRECT_URI =
+      "https://mavurioficial.github.io/mavuri-api-test/";
+
+    const resultado = document.getElementById("resultado");
+
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+
+    if (code) {
+      resultado.textContent =
+        "AUTORIZAÇÃO RECEBIDA!\n\n" +
+        "Code:\n" + code +
+        "\n\nState:\n" + state +
+        "\n\nAgora precisamos trocar esse code por um access token.";
+    }
+
+    function gerarRandom() {
+      const array = new Uint8Array(32);
+      crypto.getRandomValues(array);
+
+      return Array.from(array)
+        .map(b => b.toString(16).padStart(2, "0"))
+        .join("");
+    }
+
+    document.getElementById("autorizar")
+      .addEventListener("click", () => {
+
+        const state = gerarRandom();
+
+        sessionStorage.setItem(
+          "meli_oauth_state",
+          state
+        );
+
+        const url =
+          "https://auth.mercadolivre.com.br/authorization" +
+          "?response_type=code" +
+          "&client_id=" + CLIENT_ID +
+          "&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+          "&state=" + state;
+
+        window.location.href = url;
+      });
+  </script>
+
+</body>
+</html>
