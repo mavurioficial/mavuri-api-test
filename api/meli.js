@@ -64,43 +64,97 @@ async function buscarItem(itemId) {
   }
 }
 
-function normalizarItem(item, fallback = {}) {
+async function buscarDescricao(itemId) {
+  if (!itemId) return "";
+
+  try {
+    const response = await fetch(
+      `${MeliApi}/items/${encodeURIComponent(itemId)}/description`,
+      { headers: { Accept: "application/json" } }
+    );
+
+    const data = await lerResposta(response);
+    if (!response.ok || !data || typeof data !== "object") return "";
+
+    return String(
+      data.plain_text ||
+      data.text ||
+      data.description ||
+      ""
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
+function descricaoCurta(texto, max = 320) {
+  const limpa = String(texto || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!limpa) return "";
+  return limpa.length <= max ? limpa : `${limpa.slice(0, max).trim()}…`;
+}
+
+function normalizarItem(item, fallback = {}, description = "") {
   const installments = item?.installments || fallback?.installments || {};
   const pictures = item?.pictures || fallback?.pictures || [];
+  const itemId = item?.id || fallback?.id || fallback?.item_id || null;
+  const fallbackInstallments =
+    fallback?.installments && typeof fallback.installments === "object"
+      ? fallback.installments
+      : {};
 
   return {
-    id: item?.id || fallback?.id || null,
+    id: itemId,
     title:
       item?.title ||
       item?.name ||
       fallback?.title ||
       fallback?.name ||
-      fallback?.id ||
+      itemId ||
       "Produto sem nome",
     description:
+      descricaoCurta(description) ||
       item?.subtitle ||
       item?.short_description ||
       fallback?.description ||
       "",
-    price: item?.price ?? fallback?.price ?? null,
+    price:
+      item?.price ??
+      fallback?.price ??
+      fallback?.current_price ??
+      fallback?.sale_price ??
+      null,
     currency_id: item?.currency_id || fallback?.currency_id || "BRL",
     original_price:
       item?.original_price ??
       fallback?.original_price ??
+      fallback?.previous_price ??
+      fallback?.list_price ??
       null,
     permalink:
       item?.permalink ||
       fallback?.permalink ||
-      montarPermalink(item?.id || fallback?.id),
+      montarPermalink(itemId),
     thumbnail:
       item?.thumbnail ||
       pictures?.[0]?.url ||
       fallback?.thumbnail ||
       null,
     installments: {
-      quantity: installments?.quantity ?? 0,
-      amount: installments?.amount ?? 0,
-      rate: installments?.rate ?? 0
+      quantity:
+        installments?.quantity ??
+        fallbackInstallments?.quantity ??
+        0,
+      amount:
+        installments?.amount ??
+        fallbackInstallments?.amount ??
+        0,
+      rate:
+        installments?.rate ??
+        fallbackInstallments?.rate ??
+        0
     },
     seller_id: item?.seller_id || fallback?.seller_id || null,
     category_id: item?.category_id || fallback?.category_id || null,
@@ -116,8 +170,12 @@ async function enriquecerResultados(results) {
         resultado.item_id ||
         resultado.buy_box_winner?.item_id;
 
-      const item = await buscarItem(itemId);
-      return normalizarItem(item, resultado);
+      const [item, description] = await Promise.all([
+        buscarItem(itemId),
+        buscarDescricao(itemId)
+      ]);
+
+      return normalizarItem(item, resultado, description);
     })
   );
 
