@@ -1,53 +1,68 @@
 const MeliApi = "https://api.mercadolibre.com";
 
-export default async function handler(req, res) {
-  const q = String(req.query?.q || "asics").trim() || "asics";
-  const url = new URL(`${MeliApi}/sites/MLB/search`);
-  url.searchParams.set("q", q);
-  url.searchParams.set("limit", "2");
-
+async function probe(url, headers = {}) {
   try {
     const response = await fetch(url, {
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", ...headers },
       cache: "no-store"
     });
-
     const text = await response.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
-
-    const results = Array.isArray(data?.results) ? data.results : [];
-    const sample = results.map(item => ({
-      id: item?.id || null,
-      title: item?.title || null,
-      price: item?.price ?? null,
-      original_price: item?.original_price ?? null,
-      currency_id: item?.currency_id || null,
-      installments: item?.installments || null,
-      thumbnail: item?.thumbnail || null,
-      permalink: item?.permalink || null
-    }));
-
-    return res.status(response.status).json({
-      diagnostic_version: "2026.08.27.05",
-      upstream_url: url.toString(),
-      upstream_status: response.status,
-      upstream_status_text: response.statusText,
-      upstream_ok: response.ok,
-      result_count: results.length,
-      upstream_error: response.ok ? null : data,
-      upstream_headers: {
+    let body;
+    try { body = JSON.parse(text); } catch { body = { raw: text }; }
+    return {
+      url,
+      status: response.status,
+      status_text: response.statusText,
+      ok: response.ok,
+      body,
+      headers: {
         content_type: response.headers.get("content-type"),
         x_request_id: response.headers.get("x-request-id"),
         x_meli_request_id: response.headers.get("x-meli-request-id"),
         date: response.headers.get("date")
-      },
-      sample
-    });
+      }
+    };
   } catch (error) {
-    return res.status(500).json({
-      diagnostic_version: "2026.08.27.05",
-      error: error instanceof Error ? error.message : String(error)
-    });
+    return { url, ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+export default async function handler(req, res) {
+  const q = String(req.query?.q || "tv").trim() || "tv";
+  const limit = "2";
+  const searchUrl = new URL(`${MeliApi}/sites/MLB/search`);
+  searchUrl.searchParams.set("q", q);
+  searchUrl.searchParams.set("limit", limit);
+
+  const catalogUrl = new URL(`${MeliApi}/products/search`);
+  catalogUrl.searchParams.set("status", "active");
+  catalogUrl.searchParams.set("site_id", "MLB");
+  catalogUrl.searchParams.set("q", q);
+  catalogUrl.searchParams.set("limit", limit);
+
+  const authorization = req.headers.authorization || "";
+  const authenticatedHeaders = authorization ? { Authorization: authorization } : {};
+
+  const publicSearch = await probe(searchUrl.toString());
+  const authenticatedSearch = authorization ? await probe(searchUrl.toString(), authenticatedHeaders) : null;
+  const authenticatedCatalog = authorization ? await probe(catalogUrl.toString(), authenticatedHeaders) : null;
+
+  const resultCount = Array.isArray(publicSearch.body?.results) ? publicSearch.body.results.length : 0;
+
+  return res.status(200).json({
+    diagnostic_version: "2026.08.27.06",
+    query: q,
+    token_received: Boolean(authorization),
+    tests: {
+      public_search: publicSearch,
+      authenticated_search: authenticatedSearch,
+      authenticated_catalog: authenticatedCatalog
+    },
+    summary: {
+      public_search_status: publicSearch.status || null,
+      authenticated_search_status: authenticatedSearch?.status || null,
+      authenticated_catalog_status: authenticatedCatalog?.status || null,
+      public_result_count: resultCount
+    }
+  });
 }
