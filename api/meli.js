@@ -54,15 +54,19 @@ function normalize(item, fallback = {}, description = "") {
   const id = itemIdOf(item) || itemIdOf(fallback);
   const installments = item?.installments || fallback?.installments || {};
   const pictures = item?.pictures || fallback?.pictures || [];
+  const title = item?.title || item?.name || fallback?.title || fallback?.name || fallback?.product_name || id || "Produto sem nome";
+  const price = item?.price ?? fallback?.price ?? fallback?.current_price ?? fallback?.sale_price ?? null;
+  const originalPrice = item?.original_price ?? fallback?.original_price ?? fallback?.previous_price ?? fallback?.list_price ?? null;
+
   return {
     id,
-    title: item?.title || item?.name || fallback?.title || fallback?.name || id || "Produto sem nome",
+    title,
     description: shortDescription(description) || item?.subtitle || item?.short_description || fallback?.description || "",
-    price: item?.price ?? fallback?.price ?? fallback?.current_price ?? fallback?.sale_price ?? null,
+    price,
     currency_id: item?.currency_id || fallback?.currency_id || "BRL",
-    original_price: item?.original_price ?? fallback?.original_price ?? fallback?.previous_price ?? fallback?.list_price ?? null,
+    original_price: originalPrice,
     permalink: item?.permalink || fallback?.permalink || permalinkOf(id),
-    thumbnail: item?.thumbnail || pictures?.[0]?.secure_url || pictures?.[0]?.url || fallback?.thumbnail || null,
+    thumbnail: item?.thumbnail || item?.secure_thumbnail || pictures?.[0]?.secure_url || pictures?.[0]?.url || fallback?.thumbnail || fallback?.secure_thumbnail || null,
     installments: {
       quantity: installments?.quantity ?? 0,
       amount: installments?.amount ?? 0,
@@ -70,20 +74,25 @@ function normalize(item, fallback = {}, description = "") {
     },
     seller_id: item?.seller_id || fallback?.seller_id || null,
     category_id: item?.category_id || fallback?.category_id || null,
-    shipping: item?.shipping || fallback?.shipping || {}
+    shipping: item?.shipping || fallback?.shipping || {},
+    raw_source: item ? "item" : "fallback"
   };
 }
 
 async function enrichOne(req, fallback) {
   const id = itemIdOf(fallback);
   if (!id) return normalize(null, fallback);
+
   const [itemResult, descResult] = await Promise.all([
     meliFetch(req, `${MeliApi}/items/${encodeURIComponent(id)}`),
     meliFetch(req, `${MeliApi}/items/${encodeURIComponent(id)}/description`)
   ]);
+
   const item = itemResult.response.ok ? itemResult.data : null;
   const description = descResult.response.ok && descResult.data && typeof descResult.data === "object"
-    ? (descResult.data.plain_text || descResult.data.text || descResult.data.description || "") : "";
+    ? (descResult.data.plain_text || descResult.data.text || descResult.data.description || "")
+    : "";
+
   return normalize(item, fallback, description);
 }
 
@@ -141,11 +150,45 @@ async function diagnostic(req, q) {
 async function searchWithFallback(req, q, limit) {
   const first = await publicSearch(req, q, limit);
   const publicResults = first.response.ok && Array.isArray(first.data?.results) ? first.data.results : [];
-  if (publicResults.length > 0) return { ok: true, data: { ...first.data, results: await enrich(req, publicResults), search_source: "search_with_item_enrichment" } };
+
+  if (publicResults.length > 0) {
+    return {
+      ok: true,
+      data: {
+        ...first.data,
+        results: await enrich(req, publicResults),
+        search_source: "public_search_with_item_enrichment"
+      }
+    };
+  }
+
   const fallback = await catalogSearch(req, q, limit);
-  if (fallback.response.ok && Array.isArray(fallback.data?.results) && fallback.data.results.length > 0) return { ok: true, data: fallback.data };
-  if (first.response.ok) return { ok: true, data: { ...first.data, results: [], search_source: "public_empty_and_catalog_empty" } };
-  return { ok: false, status: first.response.status, data: { ...first.data, catalog_fallback: fallback.data || null, diagnostic: { public_status: first.response.status, catalog_status: fallback.response.status || null } } };
+  const catalogResults = fallback.response.ok && Array.isArray(fallback.data?.results) ? fallback.data.results : [];
+
+  if (catalogResults.length > 0) {
+    return {
+      ok: true,
+      data: {
+        paging: fallback.data?.paging || { total: catalogResults.length, offset: 0, limit },
+        results: await enrich(req, catalogResults),
+        search_source: "catalog_search_with_item_enrichment"
+      }
+    };
+  }
+
+  if (first.response.ok) {
+    return { ok: true, data: { ...first.data, results: [], search_source: "public_empty_and_catalog_empty" } };
+  }
+
+  return {
+    ok: false,
+    status: first.response.status,
+    data: {
+      ...first.data,
+      catalog_fallback: fallback.data || null,
+      diagnostic: { public_status: first.response.status, catalog_status: fallback.response.status || null }
+    }
+  };
 }
 
 async function generalSearch(req, limit) {
@@ -154,7 +197,11 @@ async function generalSearch(req, limit) {
   const each = Math.max(1, Math.ceil(limit / terms.length));
   for (const term of terms) {
     const result = await searchWithFallback(req, term, each);
-    if (result.ok) for (const item of Array.isArray(result.data?.results) ? result.data.results : []) if (item?.id && !unique.has(item.id)) unique.set(item.id, item);
+    if (result.ok) {
+      for (const item of Array.isArray(result.data?.results) ? result.data.results : []) {
+        if (item?.id && !unique.has(item.id)) unique.set(item.id, item);
+      }
+    }
     if (unique.size >= limit) break;
   }
   const results = Array.from(unique.values()).slice(0, limit);
@@ -164,18 +211,25 @@ async function generalSearch(req, limit) {
 export default async function handler(req, res) {
   aplicarCors(req, res);
   if (req.method === "OPTIONS") return res.status(204).end();
+
   try {
     const action = String(req.query?.action || "").toLowerCase();
+
     if (action === "me") {
       if (!req.headers.authorization) return send(res, 401, { message: "Access Token não informado." });
       const { response, data } = await meliFetch(req, `${MeliApi}/users/me`, { publicFallback: false });
       return send(res, response.status, data);
     }
+
     if (action === "categories") {
       const { response, data } = await meliFetch(req, `${MeliApi}/sites/MLB/categories`);
       return send(res, response.status, data);
     }
-    if (action === "diagnostic") return send(res, 200, await diagnostic(req, String(req.query?.q || "tv").trim()));
+
+    if (action === "diagnostic") {
+      return send(res, 200, await diagnostic(req, String(req.query?.q || "tv").trim()));
+    }
+
     if (action === "search") {
       const q = String(req.query?.q || "").trim();
       const requested = Number.parseInt(req.query?.limit || "20", 10);
@@ -185,9 +239,13 @@ export default async function handler(req, res) {
       if (result.ok) return send(res, 200, result.data);
       return send(res, result.status || 502, result.data);
     }
+
     return send(res, 400, { message: "Ação inválida.", actions: ["me", "search", "categories", "diagnostic"] });
   } catch (error) {
     console.error("Erro no proxy Mercado Livre:", error);
-    return send(res, 500, { message: "Erro interno ao consultar a API do Mercado Livre.", error: error instanceof Error ? error.message : String(error) });
+    return send(res, 500, {
+      message: "Erro interno ao consultar a API do Mercado Livre.",
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 }
