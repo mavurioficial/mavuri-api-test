@@ -1,5 +1,21 @@
 const MeliApi = "https://api.mercadolibre.com";
 
+function aplicarCors(req, res) {
+  const origin = req.headers.origin || "";
+  const allowedOrigins = new Set([
+    "https://mavurioficial.github.io",
+    "https://mavuri-api-test.vercel.app"
+  ]);
+
+  if (allowedOrigins.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type");
+}
+
 function send(res, status, data) {
   res.status(status).json(data);
 }
@@ -102,6 +118,12 @@ async function buscarCatalogo(req, q, limit) {
 }
 
 export default async function handler(req, res) {
+  aplicarCors(req, res);
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   try {
     const action = String(req.query?.action || "").toLowerCase();
 
@@ -137,10 +159,6 @@ export default async function handler(req, res) {
       url.searchParams.set("q", q);
       url.searchParams.set("limit", String(limit));
 
-      // O endpoint público /sites/MLB/search vem retornando 403 para algumas
-      // aplicações mesmo sem Authorization. Primeiro preservamos a busca
-      // tradicional; somente em caso de 403 usamos o buscador oficial de
-      // produtos de catálogo como fallback autenticado.
       const response = await fetch(url, {
         headers: montarHeaders(req, false)
       });
