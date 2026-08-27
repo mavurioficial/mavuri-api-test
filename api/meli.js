@@ -33,9 +33,7 @@ async function lerResposta(response) {
 }
 
 function montarHeaders(req, incluirToken = false) {
-  const headers = {
-    Accept: "application/json"
-  };
+  const headers = { Accept: "application/json" };
 
   if (incluirToken && req.headers.authorization) {
     headers.Authorization = req.headers.authorization;
@@ -44,8 +42,90 @@ function montarHeaders(req, incluirToken = false) {
   return headers;
 }
 
+function montarPermalink(itemId) {
+  return itemId
+    ? `https://produto.mercadolivre.com.br/${itemId}`
+    : null;
+}
+
+async function buscarItem(itemId) {
+  if (!itemId) return null;
+
+  try {
+    const response = await fetch(
+      `${MeliApi}/items/${encodeURIComponent(itemId)}`,
+      { headers: { Accept: "application/json" } }
+    );
+
+    const data = await lerResposta(response);
+    return response.ok ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizarItem(item, fallback = {}) {
+  const installments = item?.installments || fallback?.installments || {};
+  const pictures = item?.pictures || fallback?.pictures || [];
+
+  return {
+    id: item?.id || fallback?.id || null,
+    title:
+      item?.title ||
+      item?.name ||
+      fallback?.title ||
+      fallback?.name ||
+      fallback?.id ||
+      "Produto sem nome",
+    description:
+      item?.subtitle ||
+      item?.short_description ||
+      fallback?.description ||
+      "",
+    price: item?.price ?? fallback?.price ?? null,
+    currency_id: item?.currency_id || fallback?.currency_id || "BRL",
+    original_price:
+      item?.original_price ??
+      fallback?.original_price ??
+      null,
+    permalink:
+      item?.permalink ||
+      fallback?.permalink ||
+      montarPermalink(item?.id || fallback?.id),
+    thumbnail:
+      item?.thumbnail ||
+      pictures?.[0]?.url ||
+      fallback?.thumbnail ||
+      null,
+    installments: {
+      quantity: installments?.quantity ?? 0,
+      amount: installments?.amount ?? 0,
+      rate: installments?.rate ?? 0
+    },
+    seller_id: item?.seller_id || fallback?.seller_id || null,
+    category_id: item?.category_id || fallback?.category_id || null,
+    shipping: item?.shipping || fallback?.shipping || {}
+  };
+}
+
+async function enriquecerResultados(results) {
+  const enriquecidos = await Promise.all(
+    results.map(async resultado => {
+      const itemId =
+        resultado.id ||
+        resultado.item_id ||
+        resultado.buy_box_winner?.item_id;
+
+      const item = await buscarItem(itemId);
+      return normalizarItem(item, resultado);
+    })
+  );
+
+  return enriquecidos;
+}
+
 async function buscarCatalogo(req, q, limit) {
-  if (!req.headers.authorization) {
+  if (!req.headers.authorization || !q) {
     return null;
   }
 
@@ -81,7 +161,7 @@ async function buscarCatalogo(req, q, limit) {
     })
   );
 
-  const results = detalhados.map(produto => {
+  const resultadosBase = detalhados.map(produto => {
     const winner = produto.buy_box_winner || {};
     const itemId = winner.item_id || produto.id;
 
@@ -89,23 +169,26 @@ async function buscarCatalogo(req, q, limit) {
       id: itemId,
       catalog_product_id: produto.id,
       title: produto.name || produto.title || produto.id,
+      description: produto.description || "",
       price: winner.price ?? produto.price ?? null,
       currency_id: winner.currency_id || produto.currency_id || "BRL",
       original_price: winner.original_price ?? produto.original_price ?? null,
       permalink:
         produto.permalink ||
-        (winner.item_id
-          ? `https://produto.mercadolivre.com.br/${winner.item_id}`
-          : null),
+        winner.permalink ||
+        montarPermalink(winner.item_id),
       thumbnail:
         produto.pictures?.[0]?.url ||
         produto.thumbnail ||
         null,
+      installments: winner.installments || produto.installments || {},
       shipping: winner.shipping || produto.shipping || {},
       category_id: winner.category_id || produto.category_id || null,
       seller_id: winner.seller_id || produto.seller_id || null
     };
   });
+
+  const results = await enriquecerResultados(resultadosBase);
 
   return {
     response,
@@ -114,6 +197,50 @@ async function buscarCatalogo(req, q, limit) {
       results,
       search_source: "catalog_fallback"
     }
+  };
+}
+
+async function buscarGeral(req, limit) {
+  const termos = ["oferta", "promoção", "desconto", "mais vendidos"];
+  const porTermo = Math.max(1, Math.ceil(limit / termos.length));
+  const unicos = new Map();
+
+  for (const termo of termos) {
+    const url = new URL(`${MeliApi}/sites/MLB/search`);
+    url.searchParams.set("q", termo);
+    url.searchParams.set("limit", String(Math.min(porTermo, 20)));
+
+    const response = await fetch(url, {
+      headers: montarHeaders(req, false)
+    });
+    const data = await lerResposta(response);
+
+    if (response.ok) {
+      for (const item of Array.isArray(data.results) ? data.results : []) {
+        if (item?.id && !unicos.has(item.id)) unicos.set(item.id, item);
+      }
+      continue;
+    }
+
+    if (response.status === 403) {
+      const fallback = await buscarCatalogo(req, termo, porTermo);
+      if (fallback?.response?.ok) {
+        for (const item of fallback.data.results || []) {
+          if (item?.id && !unicos.has(item.id)) unicos.set(item.id, item);
+        }
+      }
+    }
+
+    if (unicos.size >= limit) break;
+  }
+
+  const base = Array.from(unicos.values()).slice(0, limit);
+  const results = await enriquecerResultados(base);
+
+  return {
+    results,
+    paging: { total: results.length, offset: 0, limit },
+    search_source: "general_search"
   };
 }
 
@@ -129,9 +256,7 @@ export default async function handler(req, res) {
 
     if (action === "me") {
       if (!req.headers.authorization) {
-        return send(res, 401, {
-          message: "Access Token não informado."
-        });
+        return send(res, 401, { message: "Access Token não informado." });
       }
 
       const response = await fetch(`${MeliApi}/users/me`, {
@@ -150,9 +275,8 @@ export default async function handler(req, res) {
       );
 
       if (!q) {
-        return send(res, 400, {
-          message: "Informe o parâmetro q para buscar produtos."
-        });
+        const geral = await buscarGeral(req, limit);
+        return send(res, 200, geral);
       }
 
       const url = new URL(`${MeliApi}/sites/MLB/search`);
@@ -163,6 +287,13 @@ export default async function handler(req, res) {
         headers: montarHeaders(req, false)
       });
       const data = await lerResposta(response);
+
+      if (response.ok) {
+        const results = await enriquecerResultados(
+          Array.isArray(data.results) ? data.results : []
+        );
+        return send(res, response.status, { ...data, results });
+      }
 
       if (response.status !== 403) {
         return send(res, response.status, data);
@@ -182,9 +313,7 @@ export default async function handler(req, res) {
 
     if (action === "categories") {
       if (!req.headers.authorization) {
-        return send(res, 401, {
-          message: "Access Token não informado."
-        });
+        return send(res, 401, { message: "Access Token não informado." });
       }
 
       const response = await fetch(`${MeliApi}/sites/MLB/categories`, {
