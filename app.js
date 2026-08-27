@@ -1,4 +1,5 @@
-const API_BASE = "https://mavuri-api-test.vercel.app/api/meli2";
+const API_BASE = "https://mavuri-api-test.vercel.app/api/meli";
+const APP_VERSION = "2026.08.27.04";
 let accessToken = "";
 const resultado = document.getElementById("resultado");
 
@@ -36,7 +37,7 @@ async function lerResposta(response) {
 }
 
 async function chamarApi(path, options = {}) {
-  const response = await fetch(API_BASE + path, options);
+  const response = await fetch(API_BASE + path, { cache: "no-store", ...options });
   const data = await lerResposta(response);
 
   if (!response.ok) {
@@ -84,11 +85,26 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
     resultado.textContent = "Digite algo para pesquisar.";
     return;
   }
-  resultado.textContent = "Buscando produtos autenticado pelo backend...";
+  resultado.textContent = "Buscando produtos e enriquecendo preços pelo backend...";
   try {
     const data = await chamarApi("?action=search&q=" + encodeURIComponent(busca) + "&limit=20", { headers: headersComToken() });
-    const produtos = (data.results || []).map(item => ({ id: item.id, titulo: item.title, preco: item.price, moeda: item.currency_id, preco_original: item.original_price, desconto: item.original_price ? Math.round((1 - item.price / item.original_price) * 100) + "%" : null, link: item.permalink, imagem: item.thumbnail, frete_gratis: item.shipping?.free_shipping || false }));
-    mostrar("RESULTADO DA BUSCA", { total: data.paging, produtos });
+    const produtos = (data.results || []).map(item => ({
+      id: item.id,
+      titulo: item.title,
+      preco: item.price,
+      moeda: item.currency_id,
+      preco_original: item.original_price,
+      desconto: item.original_price && item.price ? Math.round((1 - item.price / item.original_price) * 100) + "%" : null,
+      fonte_preco: item.price_source || null,
+      link: item.permalink,
+      imagem: item.thumbnail,
+      frete_gratis: item.shipping?.free_shipping || false
+    }));
+    mostrar("RESULTADO DA BUSCA — APP " + APP_VERSION, {
+      fonte_busca: data.search_source || null,
+      total: data.paging,
+      produtos
+    });
   } catch (erro) {
     mostrarErro("ERRO AO BUSCAR PRODUTOS", erro);
   }
@@ -96,11 +112,10 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
 
 document.getElementById("diagnosticarBusca").addEventListener("click", async () => {
   const busca = document.getElementById("busca").value.trim() || "tv";
-  resultado.textContent = "Comparando busca pública, busca autenticada e catálogo...";
+  resultado.textContent = "Comparando busca pública, autenticada e catálogo...";
   try {
-    const response = await fetch("https://mavuri-api-test.vercel.app/api/debug?q=" + encodeURIComponent(busca), { headers: headersComToken(), cache: "no-store" });
-    const data = await lerResposta(response);
-    mostrar("DIAGNÓSTICO COMPARATIVO DA BUSCA", data);
+    const data = await chamarApi("?action=diagnostic&q=" + encodeURIComponent(busca), { headers: headersComToken() });
+    mostrar("DIAGNÓSTICO COMPARATIVO DA BUSCA — APP " + APP_VERSION, data);
   } catch (erro) {
     mostrarErro("ERRO NO DIAGNÓSTICO", erro);
   }
