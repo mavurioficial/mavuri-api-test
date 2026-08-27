@@ -1,3 +1,95 @@
-const https=require("https");
-function getJson(url,headers={}){return new Promise((resolve,reject)=>{https.get(url,{headers},response=>{let body="";response.on("data",chunk=>body+=chunk);response.on("end",()=>{let data;try{data=body?JSON.parse(body):{}}catch{data={resposta_texto:body}}resolve({status:response.statusCode||500,data})})}).on("error",reject)})}
-module.exports=async(req,res)=>{res.setHeader("Access-Control-Allow-Origin","*");res.setHeader("Access-Control-Allow-Methods","GET, OPTIONS");res.setHeader("Access-Control-Allow-Headers","Authorization, Content-Type");if(req.method==="OPTIONS")return res.status(204).end();if(req.method!=="GET")return res.status(405).json({error:"method_not_allowed",message:"Use GET"});const action=req.query.action;let url;const headers={Accept:"application/json","User-Agent":"Mavuri/1.0 (server-side proxy)"};if(action==="me"){const authorization=req.headers.authorization;if(!authorization?.startsWith("Bearer "))return res.status(401).json({error:"missing_token",message:"Informe o Access Token para testar /users/me."});headers.Authorization=authorization;url="https://api.mercadolibre.com/users/me"}else if(action==="search"){const q=String(req.query.q||"").trim();const limit=Math.min(Math.max(Number(req.query.limit)||20,1),50);if(!q)return res.status(400).json({error:"missing_query",message:"Informe o parâmetro q."});url="https://api.mercadolibre.com/sites/MLB/search?q="+encodeURIComponent(q)+"&limit="+limit}else if(action==="categories"){url="https://api.mercadolibre.com/sites/MLB/categories"}else{return res.status(400).json({error:"invalid_action",message:"Use action=me, search ou categories."})}try{const resposta=await getJson(url,headers);return res.status(resposta.status).json(resposta.data)}catch(erro){console.error("Erro no proxy Mercado Livre:",erro);return res.status(502).json({error:"proxy_error",message:"Não foi possível consultar a API do Mercado Livre."})}};
+const MeliApi = "https://api.mercadolibre.com";
+
+function send(res, status, data) {
+  res.status(status).json(data);
+}
+
+export default async function handler(req, res) {
+  try {
+    const action = String(req.query?.action || "").toLowerCase();
+
+    if (action === "me") {
+      const authorization = req.headers.authorization;
+
+      if (!authorization) {
+        return send(res, 401, {
+          message: "Access Token não informado."
+        });
+      }
+
+      const response = await fetch(`${MeliApi}/users/me`, {
+        headers: {
+          Authorization: authorization
+        }
+      });
+
+      const data = await response.json();
+      return send(res, response.status, data);
+    }
+
+    if (action === "search") {
+      const q = String(req.query?.q || "").trim();
+
+      const requestedLimit = Number.parseInt(
+        req.query?.limit || "20",
+        10
+      );
+
+      const limit = Math.min(
+        Math.max(
+          Number.isFinite(requestedLimit) ? requestedLimit : 20,
+          1
+        ),
+        50
+      );
+
+      if (!q) {
+        return send(res, 400, {
+          message: "Informe o parâmetro q para buscar produtos."
+        });
+      }
+
+      const url = new URL(
+        `${MeliApi}/sites/MLB/search`
+      );
+
+      url.searchParams.set("q", q);
+      url.searchParams.set("limit", String(limit));
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      return send(res, response.status, data);
+    }
+
+    if (action === "categories") {
+      const response = await fetch(
+        `${MeliApi}/sites/MLB/categories`
+      );
+
+      const data = await response.json();
+
+      return send(res, response.status, data);
+    }
+
+    return send(res, 400, {
+      message: "Ação inválida.",
+      actions: ["me", "search", "categories"]
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro no proxy Mercado Livre:",
+      error
+    );
+
+    return send(res, 500, {
+      message:
+        "Erro interno ao consultar a API do Mercado Livre.",
+      error:
+        error instanceof Error
+          ? error.message
+          : String(error)
+    });
+  }
+}
