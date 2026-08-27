@@ -8,6 +8,20 @@ function mostrar(titulo, dados) {
     JSON.stringify(dados, null, 2);
 }
 
+function mostrarErro(titulo, erro) {
+  console.error(titulo, erro);
+
+  const detalhes = {
+    nome: erro?.name || "Erro desconhecido",
+    mensagem: erro?.message || String(erro),
+    status: erro?.status || null,
+    dados: erro?.data || null,
+    stack: erro?.stack || null
+  };
+
+  mostrar(titulo, detalhes);
+}
+
 function obterToken() {
   if (!accessToken) {
     accessToken = document
@@ -18,6 +32,23 @@ function obterToken() {
 
   return accessToken;
 }
+
+async function lerResposta(response) {
+  const texto = await response.text();
+
+  try {
+    return JSON.parse(texto);
+  } catch {
+    return {
+      resposta_texto: texto
+    };
+  }
+}
+
+
+/* =========================================
+   USAR TOKEN
+========================================= */
 
 document
   .getElementById("salvarToken")
@@ -40,6 +71,10 @@ document
   });
 
 
+/* =========================================
+   TESTAR USUÁRIO AUTENTICADO
+========================================= */
+
 document
   .getElementById("testarUsuario")
   .addEventListener("click", async () => {
@@ -57,19 +92,28 @@ document
 
     try {
 
+      console.log("Iniciando teste /users/me");
+
       const response = await fetch(
         "https://api.mercadolibre.com/users/me",
         {
+          method: "GET",
           headers: {
-            "Authorization": "Bearer " + token
+            "Authorization": "Bearer " + token,
+            "Accept": "application/json"
           }
         }
       );
 
-      const data = await response.json();
+      const data = await lerResposta(response);
+
+      console.log("Status:", response.status);
+      console.log("Resposta:", data);
 
       if (!response.ok) {
         throw {
+          name: "Erro da API",
+          message: "A API retornou HTTP " + response.status,
           status: response.status,
           data: data
         };
@@ -82,7 +126,7 @@ document
 
     } catch (erro) {
 
-      mostrar(
+      mostrarErro(
         "ERRO AO TESTAR TOKEN",
         erro
       );
@@ -91,6 +135,10 @@ document
 
   });
 
+
+/* =========================================
+   BUSCAR PRODUTOS
+========================================= */
 
 document
   .getElementById("buscarProdutos")
@@ -117,12 +165,21 @@ document
         encodeURIComponent(busca) +
         "&limit=20";
 
-      const response = await fetch(url);
+      console.log("URL:", url);
 
-      const data = await response.json();
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Accept": "application/json"
+        }
+      });
+
+      const data = await lerResposta(response);
 
       if (!response.ok) {
         throw {
+          name: "Erro da API",
+          message: "A API retornou HTTP " + response.status,
           status: response.status,
           data: data
         };
@@ -132,6 +189,7 @@ document
         id: item.id,
         titulo: item.title,
         preco: item.price,
+        moeda: item.currency_id,
         preco_original: item.original_price,
         desconto: item.original_price
           ? Math.round(
@@ -155,7 +213,7 @@ document
 
     } catch (erro) {
 
-      mostrar(
+      mostrarErro(
         "ERRO AO BUSCAR PRODUTOS",
         erro
       );
@@ -164,6 +222,10 @@ document
 
   });
 
+
+/* =========================================
+   TESTAR CATEGORIAS
+========================================= */
 
 document
   .getElementById("testarCategorias")
@@ -175,13 +237,21 @@ document
     try {
 
       const response = await fetch(
-        "https://api.mercadolibre.com/sites/MLB/categories"
+        "https://api.mercadolibre.com/sites/MLB/categories",
+        {
+          method: "GET",
+          headers: {
+            "Accept": "application/json"
+          }
+        }
       );
 
-      const data = await response.json();
+      const data = await lerResposta(response);
 
       if (!response.ok) {
         throw {
+          name: "Erro da API",
+          message: "A API retornou HTTP " + response.status,
           status: response.status,
           data: data
         };
@@ -194,7 +264,7 @@ document
 
     } catch (erro) {
 
-      mostrar(
+      mostrarErro(
         "ERRO AO CONSULTAR CATEGORIAS",
         erro
       );
