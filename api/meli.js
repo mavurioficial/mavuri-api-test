@@ -94,31 +94,32 @@ async function resolvePrice(req, id) {
 
 function normalize(item, fallback = {}, description = "", priceInfo = null) {
   const id = itemIdOf(item) || itemIdOf(fallback);
-  const installments = item?.installments || fallback?.installments || {};
+  const winner = item?.buy_box_winner || fallback?.buy_box_winner || {};
+  const installments = item?.installments || fallback?.installments || winner?.installments || {};
   const pictures = item?.pictures || fallback?.pictures || [];
   const title = item?.title || item?.name || fallback?.title || fallback?.name || fallback?.product_name || id || "Produto sem nome";
-  const price = priceInfo?.price ?? item?.price ?? fallback?.price ?? fallback?.current_price ?? fallback?.sale_price ?? null;
-  const originalPrice = priceInfo?.original_price ?? item?.original_price ?? fallback?.original_price ?? fallback?.previous_price ?? fallback?.list_price ?? null;
+  const price = priceInfo?.price ?? item?.price ?? fallback?.price ?? fallback?.current_price ?? fallback?.sale_price ?? winner?.price ?? winner?.sale_price ?? null;
+  const originalPrice = priceInfo?.original_price ?? item?.original_price ?? fallback?.original_price ?? fallback?.previous_price ?? fallback?.list_price ?? winner?.original_price ?? winner?.regular_amount ?? null;
 
   return {
     id,
     title,
     description: shortDescription(description) || item?.subtitle || item?.short_description || fallback?.description || "",
     price,
-    currency_id: priceInfo?.currency_id || item?.currency_id || fallback?.currency_id || "BRL",
+    currency_id: priceInfo?.currency_id || item?.currency_id || fallback?.currency_id || winner?.currency_id || "BRL",
     original_price: originalPrice,
-    permalink: item?.permalink || fallback?.permalink || permalinkOf(id),
-    thumbnail: item?.thumbnail || item?.secure_thumbnail || pictures?.[0]?.secure_url || pictures?.[0]?.url || fallback?.thumbnail || fallback?.secure_thumbnail || null,
+    permalink: item?.permalink || fallback?.permalink || winner?.permalink || permalinkOf(id),
+    thumbnail: item?.thumbnail || item?.secure_thumbnail || pictures?.[0]?.secure_url || pictures?.[0]?.url || fallback?.thumbnail || fallback?.secure_thumbnail || winner?.thumbnail || null,
     installments: {
       quantity: installments?.quantity ?? 0,
       amount: installments?.amount ?? 0,
       rate: installments?.rate ?? 0
     },
-    seller_id: item?.seller_id || fallback?.seller_id || null,
-    category_id: item?.category_id || fallback?.category_id || null,
-    shipping: item?.shipping || fallback?.shipping || {},
+    seller_id: item?.seller_id || fallback?.seller_id || winner?.seller_id || null,
+    category_id: item?.category_id || fallback?.category_id || winner?.category_id || null,
+    shipping: item?.shipping || fallback?.shipping || winner?.shipping || {},
     raw_source: item ? "item" : "fallback",
-    price_source: priceInfo?.source || (price != null ? "item_legacy" : null)
+    price_source: priceInfo?.source || (winner?.price != null ? "catalog_buy_box_winner" : (price != null ? "item_legacy" : null))
   };
 }
 
