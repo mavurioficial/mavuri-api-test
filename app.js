@@ -1,4 +1,4 @@
-const API_BASE = "/api/meli";
+const API_BASE = "/api/meli2";
 let accessToken = "";
 const resultado = document.getElementById("resultado");
 
