@@ -29,8 +29,6 @@ async function meliFetch(req, url, { publicFallback = true } = {}) {
   let response = await fetch(url, { headers: authHeaders(req), cache: "no-store" });
   let data = await lerResposta(response);
 
-  // Alguns recursos públicos do Mercado Livre respondem 403 para o token
-  // utilizado na aplicação. Nessa situação tentamos a mesma consulta sem token.
   if (publicFallback && !response.ok && req.headers.authorization && (response.status === 401 || response.status === 403)) {
     response = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" });
     data = await lerResposta(response);
@@ -94,7 +92,6 @@ async function enrichOne(req, fallback) {
 }
 
 async function enrich(req, results) {
-  // Evita que uma falha em um produto derrube todos os demais.
   const settled = await Promise.allSettled(results.map(item => enrichOne(req, item)));
   return settled.map((result, index) =>
     result.status === "fulfilled" ? result.value : normalize(null, results[index])
@@ -109,7 +106,8 @@ async function publicSearch(req, q, limit) {
 }
 
 async function catalogSearch(req, q, limit) {
-  if (!q) return { response: { ok: false, status: 400 }, data: null };
+  if (!q || !req.headers.authorization) return { response: { ok: false, status: 401 }, data: null };
+
   const url = new URL(`${MeliApi}/products/search`);
   url.searchParams.set("status", "active");
   url.searchParams.set("site_id", "MLB");
@@ -120,21 +118,76 @@ async function catalogSearch(req, q, limit) {
   if (!response.ok) return { response, data };
 
   const products = Array.isArray(data?.results) ? data.results : [];
-  const base = products.slice(0, limit).map(product => {
+
+  // A busca de catálogo pode devolver somente o ID do produto de catálogo.
+  // Consultamos cada produto para obter o buy_box_winner e o item MLB real.
+  const detailed = await Promise.allSettled(products.slice(0, limit).map(async product => {
+    if (!product?.id) return product;
+    const detail = await meliFetch(
+      req,
+      `${MeliApi}/products/${encodeURIComponent(product.id)}`,
+      { publicFallback: false }
+    );
+    return detail.response.ok && detail.data && typeof detail.data === "object" ? detail.data : product;
+  }));
+
+  const base = detailed.map((entry, index) =>
+    entry.status === "fulfilled" ? entry.value : products[index]
+  ).map(product => {
     const winner = product?.buy_box_winner || {};
-    const id = winner.item_id || product.item_id || null;
+    const id = winner.item_id || product?.item_id || null;
     return {
       id,
-      title: product.name || product.title || id || product.id,
-      price: winner.price ?? product.price ?? null,
-      original_price: winner.original_price ?? product.original_price ?? null,
-      permalink: winner.permalink || product.permalink || permalinkOf(id),
-      thumbnail: product?.pictures?.[0]?.url || product.thumbnail || null,
-      installments: winner.installments || product.installments || {}
+      catalog_product_id: product?.id || null,
+      title: product?.name || product?.title || id || product?.id,
+      description: product?.description || "",
+      price: winner.price ?? product?.price ?? null,
+      original_price: winner.original_price ?? product?.original_price ?? null,
+      permalink: winner.permalink || product?.permalink || permalinkOf(id),
+      thumbnail: product?.pictures?.[0]?.secure_url || product?.pictures?.[0]?.url || product?.thumbnail || null,
+      installments: winner.installments || product?.installments || {},
+      shipping: winner.shipping || product?.shipping || {},
+      category_id: winner.category_id || product?.category_id || null,
+      seller_id: winner.seller_id || product?.seller_id || null
     };
   }).filter(item => item.id);
 
-  return { response: { ok: true, status: 200 }, data: { results: await enrich(req, base), search_source: "catalog_fallback" } };
+  const results = await enrich(req, base);
+  return {
+    response: { ok: true, status: 200 },
+    data: { ...data, results, paging: { total: results.length, offset: 0, limit }, search_source: "catalog_fallback" }
+  };
+}
+
+async function searchWithFallback(req, q, limit) {
+  const first = await publicSearch(req, q, limit);
+  const publicResults = first.response.ok && Array.isArray(first.data?.results) ? first.data.results : [];
+
+  // Não tratamos HTTP 200 vazio como sucesso definitivo: esse foi exatamente
+  // o cenário que fez a interface voltar a mostrar "Nenhuma oferta encontrada".
+  if (publicResults.length > 0) {
+    const results = await enrich(req, publicResults);
+    return { ok: true, data: { ...first.data, results, search_source: "search_with_item_enrichment" } };
+  }
+
+  const fallback = await catalogSearch(req, q, limit);
+  if (fallback.response.ok && Array.isArray(fallback.data?.results) && fallback.data.results.length > 0) {
+    return { ok: true, data: fallback.data };
+  }
+
+  if (first.response.ok) {
+    return { ok: true, data: { ...first.data, results: [], search_source: "public_empty_and_catalog_empty" } };
+  }
+
+  return {
+    ok: false,
+    status: first.response.status,
+    data: {
+      ...first.data,
+      catalog_fallback: fallback.data || null,
+      diagnostic: { public_status: first.response.status, catalog_status: fallback.response.status || null }
+    }
+  };
 }
 
 async function generalSearch(req, limit) {
@@ -143,20 +196,20 @@ async function generalSearch(req, limit) {
   const each = Math.max(1, Math.ceil(limit / terms.length));
 
   for (const term of terms) {
-    const { response, data } = await publicSearch(req, term, each);
-    if (response.ok) {
-      for (const item of Array.isArray(data?.results) ? data.results : []) {
+    const result = await searchWithFallback(req, term, each);
+    if (result.ok) {
+      for (const item of Array.isArray(result.data?.results) ? result.data.results : []) {
         if (item?.id && !unique.has(item.id)) unique.set(item.id, item);
       }
     }
     if (unique.size >= limit) break;
   }
 
-  const base = Array.from(unique.values()).slice(0, limit);
+  const results = Array.from(unique.values()).slice(0, limit);
   return {
-    results: await enrich(req, base),
-    paging: { total: base.length, offset: 0, limit },
-    search_source: "general_search"
+    results,
+    paging: { total: results.length, offset: 0, limit },
+    search_source: "general_search_with_catalog_fallback"
   };
 }
 
@@ -185,23 +238,9 @@ export default async function handler(req, res) {
 
       if (!q) return send(res, 200, await generalSearch(req, limit));
 
-      // Primeiro usa a busca pública. Se a infraestrutura do Meli bloquear,
-      // tenta o catálogo autenticado e depois enriquece cada item real.
-      const first = await publicSearch(req, q, limit);
-      if (first.response.ok) {
-        const base = Array.isArray(first.data?.results) ? first.data.results : [];
-        const results = await enrich(req, base);
-        return send(res, 200, { ...first.data, results, search_source: "search_with_item_enrichment" });
-      }
-
-      const fallback = await catalogSearch(req, q, limit);
-      if (fallback.response.ok) return send(res, 200, fallback.data);
-
-      return send(res, first.response.status, {
-        ...first.data,
-        catalog_fallback: fallback.data || null,
-        diagnostic: { public_status: first.response.status, catalog_status: fallback.response.status || null }
-      });
+      const result = await searchWithFallback(req, q, limit);
+      if (result.ok) return send(res, 200, result.data);
+      return send(res, result.status || 502, result.data);
     }
 
     return send(res, 400, { message: "Ação inválida.", actions: ["me", "search", "categories"] });
