@@ -72,10 +72,7 @@ document.getElementById("testarUsuario").addEventListener("click", async () => {
   resultado.textContent = "Consultando usuário autenticado pelo backend...";
 
   try {
-    mostrar(
-      "AUTENTICAÇÃO FUNCIONANDO!",
-      await chamarApi("?action=me", { headers: headersComToken() })
-    );
+    mostrar("AUTENTICAÇÃO FUNCIONANDO!", await chamarApi("?action=me", { headers: headersComToken() }));
   } catch (erro) {
     mostrarErro("ERRO AO TESTAR TOKEN", erro);
   }
@@ -83,48 +80,36 @@ document.getElementById("testarUsuario").addEventListener("click", async () => {
 
 document.getElementById("buscarProdutos").addEventListener("click", async () => {
   const busca = document.getElementById("busca").value.trim();
-
   if (!busca) {
     resultado.textContent = "Digite algo para pesquisar.";
     return;
   }
-
   resultado.textContent = "Buscando produtos autenticado pelo backend...";
-
   try {
-    const data = await chamarApi(
-      "?action=search&q=" + encodeURIComponent(busca) + "&limit=20",
-      { headers: headersComToken() }
-    );
-
-    const produtos = (data.results || []).map(item => ({
-      id: item.id,
-      titulo: item.title,
-      preco: item.price,
-      moeda: item.currency_id,
-      preco_original: item.original_price,
-      desconto: item.original_price
-        ? Math.round((1 - item.price / item.original_price) * 100) + "%"
-        : null,
-      link: item.permalink,
-      imagem: item.thumbnail,
-      frete_gratis: item.shipping?.free_shipping || false
-    }));
-
+    const data = await chamarApi("?action=search&q=" + encodeURIComponent(busca) + "&limit=20", { headers: headersComToken() });
+    const produtos = (data.results || []).map(item => ({ id: item.id, titulo: item.title, preco: item.price, moeda: item.currency_id, preco_original: item.original_price, desconto: item.original_price ? Math.round((1 - item.price / item.original_price) * 100) + "%" : null, link: item.permalink, imagem: item.thumbnail, frete_gratis: item.shipping?.free_shipping || false }));
     mostrar("RESULTADO DA BUSCA", { total: data.paging, produtos });
   } catch (erro) {
     mostrarErro("ERRO AO BUSCAR PRODUTOS", erro);
   }
 });
 
-document.getElementById("testarCategorias").addEventListener("click", async () => {
-  resultado.textContent = "Consultando categorias autenticado pelo backend...";
-
+document.getElementById("diagnosticarBusca").addEventListener("click", async () => {
+  const busca = document.getElementById("busca").value.trim() || "tv";
+  resultado.textContent = "Comparando busca pública, busca autenticada e catálogo...";
   try {
-    mostrar(
-      "CATEGORIAS DO MERCADO LIVRE",
-      await chamarApi("?action=categories", { headers: headersComToken() })
-    );
+    const response = await fetch("/api/debug?q=" + encodeURIComponent(busca), { headers: headersComToken(), cache: "no-store" });
+    const data = await lerResposta(response);
+    mostrar("DIAGNÓSTICO COMPARATIVO DA BUSCA", data);
+  } catch (erro) {
+    mostrarErro("ERRO NO DIAGNÓSTICO", erro);
+  }
+});
+
+document.getElementById("testarCategorias").addEventListener("click", async () => {
+  resultado.textContent = "Consultando categorias pelo backend...";
+  try {
+    mostrar("CATEGORIAS DO MERCADO LIVRE", await chamarApi("?action=categories", { headers: headersComToken() }));
   } catch (erro) {
     mostrarErro("ERRO AO CONSULTAR CATEGORIAS", erro);
   }
