@@ -4,7 +4,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 const BASE_RESOLVER = 'https://mavuri-api-test.vercel.app/api/resolve';
-const RESOLVER_VERSION = '2026.08.28.06';
+const RESOLVER_VERSION = '2026.08.28.07';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -38,14 +38,18 @@ function cleanQueryFromProductUrl(productUrl) {
     const url = new URL(productUrl);
     const marker = url.pathname.match(/^\/([^/]+)\/p\/MLB\d+/i);
     if (!marker?.[1]) return '';
-    return decodeURIComponent(marker[1])
-      .replace(/-/g, ' ')
-      .replace(/\bcom\s+ia\b/gi, 'com IA')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return decodeURIComponent(marker[1]).replace(/-/g, ' ').replace(/\s+/g, ' ').trim();
   } catch {
     return '';
   }
+}
+
+function titleFromSlug(query) {
+  return String(query || '')
+    .split(' ')
+    .filter(Boolean)
+    .map(word => /^(ia|nfc|ip54|gb|mp|ram)$/i.test(word) ? word.toUpperCase() : word)
+    .join(' ');
 }
 
 function normalize(value) {
@@ -84,7 +88,10 @@ function pickPublicResult(results, productId, query) {
 async function readJson(url) {
   try {
     const response = await fetch(url, {
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'Mavuri Affiliate Engine/0.1'
+      },
       cache: 'no-store'
     });
     if (!response.ok) return null;
@@ -94,32 +101,52 @@ async function readJson(url) {
   }
 }
 
+async function searchPublicCatalog(query, productId) {
+  const words = query.split(' ').filter(Boolean);
+  const variants = [
+    query,
+    words.slice(0, 8).join(' '),
+    words.slice(0, 6).join(' '),
+    words.slice(0, 4).join(' '),
+    productId
+  ].filter(Boolean);
+
+  for (const term of [...new Set(variants)]) {
+    const url = new URL('https://api.mercadolibre.com/sites/MLB/search');
+    url.searchParams.set('q', term);
+    url.searchParams.set('limit', '50');
+    const search = await readJson(url.toString());
+    const item = pickPublicResult(search?.results, productId, query);
+    if (item) return item;
+  }
+
+  return null;
+}
+
 async function enrichFromPublicSearch(payload) {
   const product = { ...(payload.product || {}) };
   const productId = String(payload.productId || product.id || '').toUpperCase();
   const query = cleanQueryFromProductUrl(payload.productUrl || product.url || '');
 
-  if (!query) return { ...payload, product };
+  if (!query) {
+    return { ...payload, product, resolverVersion: RESOLVER_VERSION, fallbackUsed: false };
+  }
 
-  const searchUrl = new URL('https://api.mercadolibre.com/sites/MLB/search');
-  searchUrl.searchParams.set('q', query);
-  searchUrl.searchParams.set('limit', '50');
+  const item = await searchPublicCatalog(query, productId);
 
-  const search = await readJson(searchUrl.toString());
-  const item = pickPublicResult(search?.results, productId, query);
-  if (!item) return { ...payload, product };
+  // Mesmo quando a busca pública não retornar uma oferta, a URL real já traz
+  // um título confiável no slug. Preenchemos ao menos esse dado sem inventar preço.
+  product.title = firstText(product.title, item?.title, item?.name, titleFromSlug(query));
+  product.category = firstText(product.category, item?.category_id);
+  product.image = firstText(product.image, item?.thumbnail, item?.secure_thumbnail, item?.pictures?.[0]?.url);
+  product.price = firstNumber(product.price, item?.price);
+  product.previousPrice = firstNumber(product.previousPrice, item?.original_price);
 
-  product.title = firstText(product.title, item.title, item.name);
-  product.category = firstText(product.category, item.category_id);
-  product.image = firstText(product.image, item.thumbnail, item.secure_thumbnail, item.pictures?.[0]?.url);
-  product.price = firstNumber(product.price, item.price);
-  product.previousPrice = firstNumber(product.previousPrice, item.original_price);
-
-  const installments = item.installments || {};
-  product.installments = firstNumber(product.installments, installments.quantity, item.installments_count);
+  const installments = item?.installments || {};
+  product.installments = firstNumber(product.installments, installments.quantity, item?.installments_count);
   product.installmentAmount = firstNumber(product.installmentAmount, installments.amount);
-  product.currency = firstText(product.currency, item.currency_id, 'BRL');
-  product.source = product.title || product.price !== null ? 'mercadolivre-public-search' : product.source || 'not-found';
+  product.currency = firstText(product.currency, item?.currency_id, 'BRL');
+  product.source = item ? 'mercadolivre-public-search' : product.title ? 'product-url-slug' : product.source || 'not-found';
 
   if (product.category && /^MLB\d+$/i.test(product.category)) {
     const category = await readJson(`https://api.mercadolibre.com/categories/${encodeURIComponent(product.category)}`);
@@ -138,9 +165,11 @@ async function enrichFromPublicSearch(payload) {
       url: payload.productUrl || product.url || ''
     },
     resolverVersion: RESOLVER_VERSION,
-    fallbackUsed: true,
+    fallbackUsed: Boolean(item),
     message: product.title || product.price !== null
-      ? 'Anúncio real localizado e dados recuperados pela busca pública do Mercado Livre.'
+      ? item
+        ? 'Anúncio real localizado e dados recuperados pela busca pública do Mercado Livre.'
+        : 'Anúncio real localizado. Nome recuperado pela URL; outros dados não foram disponibilizados na busca pública.'
       : payload.message
   };
 }
@@ -164,15 +193,14 @@ export default async function handler(req, res) {
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok || !payload?.ok) {
-      return res.status(response.status || 502).json({
-        ...payload,
-        resolverVersion: RESOLVER_VERSION
-      });
+      return res.status(response.status || 502).json({ ...payload, resolverVersion: RESOLVER_VERSION });
     }
 
     const product = payload.product || {};
-    const alreadyLoaded = Boolean(product.title || product.price !== null && product.price !== undefined);
-    const enriched = alreadyLoaded ? { ...payload, resolverVersion: RESOLVER_VERSION, fallbackUsed: false } : await enrichFromPublicSearch(payload);
+    const alreadyLoaded = Boolean(product.title || (product.price !== null && product.price !== undefined));
+    const enriched = alreadyLoaded
+      ? { ...payload, resolverVersion: RESOLVER_VERSION, fallbackUsed: false }
+      : await enrichFromPublicSearch(payload);
 
     return res.status(200).json(enriched);
   } catch (error) {
