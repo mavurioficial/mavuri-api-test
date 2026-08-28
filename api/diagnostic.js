@@ -1,5 +1,5 @@
 const MeliApi = "https://api.mercadolibre.com";
-const APP_LOGIC = "2026.08.27.07";
+const APP_LOGIC = "2026.08.28.02";
 
 function cors(req, res) {
   const origin = req.headers.origin || "";
@@ -51,6 +51,11 @@ function productSummary(product) {
   };
 }
 
+function productRawSample(product) {
+  if (!product || typeof product !== "object") return product;
+  return product;
+}
+
 async function probeRealItem(req, itemId) {
   const base = `${MeliApi}/items/${encodeURIComponent(itemId)}`;
   const [item, multiget, salePrice, prices] = await Promise.all([
@@ -75,6 +80,7 @@ export default async function handler(req, res) {
     const q = String(req.query?.q || "tv").trim() || "tv";
     const hasAuthorization = Boolean(req.headers.authorization);
     const results = [];
+    let authenticatedProductsSample = [];
 
     if (hasAuthorization) {
       const me = await call(req, `${MeliApi}/users/me`, true);
@@ -89,7 +95,17 @@ export default async function handler(req, res) {
       results.push({ name: "search_authenticated", status: authSearch.response.status, ok: authSearch.response.ok, result_count: count(authSearch.data), error: authSearch.response.ok ? null : authSearch.data });
 
       const products = await call(req, `${MeliApi}/products/search?status=active&site_id=MLB&q=${encodeURIComponent(q)}&limit=5`, true);
-      results.push({ name: "products_search_authenticated", status: products.response.status, ok: products.response.ok, result_count: count(products.data), error: products.response.ok ? null : products.data });
+      authenticatedProductsSample = products.response.ok && Array.isArray(products.data?.results)
+        ? products.data.results.slice(0, 5).map(productRawSample)
+        : [];
+      results.push({
+        name: "products_search_authenticated",
+        status: products.response.status,
+        ok: products.response.ok,
+        result_count: count(products.data),
+        paging: products.response.ok ? products.data?.paging || null : null,
+        error: products.response.ok ? null : products.data
+      });
 
       if (products.response.ok && Array.isArray(products.data?.results)) {
         for (const product of products.data.results.slice(0, 5)) {
@@ -110,11 +126,16 @@ export default async function handler(req, res) {
         }
       }
 
-      // ID real documentado pelo Mercado Livre para validar o pipeline de /items.
       results.push({ name: "documented_real_item_probe", ...(await probeRealItem(req, "MLB1828680414")) });
     }
 
-    return res.status(200).json({ app_logic: APP_LOGIC, query: q, has_authorization: hasAuthorization, results });
+    return res.status(200).json({
+      app_logic: APP_LOGIC,
+      query: q,
+      has_authorization: hasAuthorization,
+      authenticated_products_sample: authenticatedProductsSample,
+      results
+    });
   } catch (error) {
     return res.status(500).json({ app_logic: APP_LOGIC, message: "Erro no diagnóstico.", error: error instanceof Error ? error.message : String(error) });
   }
