@@ -3,7 +3,7 @@ const ALLOWED_ORIGINS = new Set([
   'https://mavuri-api-test.vercel.app'
 ]);
 
-const RESOLVER_VERSION = '2026.08.28.02';
+const RESOLVER_VERSION = '2026.08.28.03';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -181,6 +181,27 @@ function extractProductData(html, productUrl, productId) {
   };
 }
 
+function mergeProductData(base, extra) {
+  const price = base.price ?? extra.price ?? null;
+  const previousPrice = base.previousPrice ?? extra.previousPrice ?? null;
+  return {
+    ...base,
+    ...extra,
+    id: base.id || extra.id || '',
+    url: base.url || extra.url || '',
+    title: base.title || extra.title || '',
+    category: base.category || extra.category || '',
+    image: base.image || extra.image || '',
+    price,
+    previousPrice: previousPrice && (!price || previousPrice > price) ? previousPrice : null,
+    installments: base.installments ?? extra.installments ?? null,
+    installmentAmount: base.installmentAmount ?? extra.installmentAmount ?? null,
+    discount: base.discount ?? extra.discount ?? (price && previousPrice && previousPrice > price ? Math.round(((previousPrice - price) / previousPrice) * 100) : null),
+    currency: base.currency || extra.currency || 'BRL',
+    source: extra.source || base.source
+  };
+}
+
 async function follow(url) {
   return fetch(url, {
     method: 'GET',
@@ -191,6 +212,70 @@ async function follow(url) {
       'accept-language': 'pt-BR,pt;q=0.9'
     }
   });
+}
+
+async function fetchJson(url) {
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        'accept': 'application/json',
+        'user-agent': 'Mozilla/5.0 (compatible; MavuriResolver/1.0)'
+      }
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function extractApiProduct(productId, productApi, itemsApi) {
+  const items = Array.isArray(itemsApi?.results) ? itemsApi.results : Array.isArray(itemsApi) ? itemsApi : [];
+  const normalizedItems = items
+    .map(item => item?.body || item)
+    .filter(item => item && Number.isFinite(Number(item.price)) && Number(item.price) > 0)
+    .sort((a, b) => Number(a.price) - Number(b.price));
+  const best = normalizedItems[0] || null;
+  const productPicture = Array.isArray(productApi?.pictures)
+    ? (productApi.pictures[0]?.secure_url || productApi.pictures[0]?.url || '')
+    : '';
+  const image = productPicture || best?.thumbnail || best?.secure_thumbnail || '';
+  const price = asNumber(best?.price);
+  const previousPrice = asNumber(best?.original_price ?? best?.regular_price ?? null);
+  const title = firstString(productApi?.name, productApi?.title, best?.title);
+  const category = firstString(productApi?.category_id, productApi?.domain_id, best?.category_id, best?.domain_id);
+  const currency = firstString(best?.currency_id, productApi?.currency_id, 'BRL');
+  const installments = asNumber(best?.installments ?? best?.installments_number ?? null);
+  const installmentAmount = asNumber(best?.installment_amount ?? null);
+  const discount = price && previousPrice && previousPrice > price
+    ? Math.round(((previousPrice - price) / previousPrice) * 100)
+    : null;
+
+  return {
+    id: productId || '',
+    title,
+    category,
+    image,
+    price,
+    previousPrice: previousPrice && (!price || previousPrice > price) ? previousPrice : null,
+    discount,
+    installments,
+    installmentAmount,
+    currency,
+    source: normalizedItems.length ? 'mercadolivre-catalog-api' : 'mercadolivre-product-api'
+  };
+}
+
+async function enrichFromMercadoLivreApi(productId) {
+  if (!productId) return {};
+  const base = 'https://api.mercadolibre.com';
+  const [productApi, itemsApi] = await Promise.all([
+    fetchJson(`${base}/products/${encodeURIComponent(productId)}`),
+    fetchJson(`${base}/products/${encodeURIComponent(productId)}/items`)
+  ]);
+  return extractApiProduct(productId, productApi, itemsApi);
 }
 
 export default async function handler(req, res) {
@@ -233,7 +318,12 @@ export default async function handler(req, res) {
     const productResponse = await follow(productUrl);
     const finalProductUrl = productResponse.url || productUrl;
     const productHtml = await productResponse.text();
-    const product = extractProductData(productHtml, finalProductUrl, productId || findProductId(finalProductUrl));
+    const resolvedId = productId || findProductId(finalProductUrl);
+    const pageProduct = extractProductData(productHtml, finalProductUrl, resolvedId);
+    const apiProduct = await enrichFromMercadoLivreApi(resolvedId);
+    const product = mergeProductData(pageProduct, apiProduct);
+    product.url = finalProductUrl;
+    product.id = resolvedId || product.id || '';
 
     return res.status(200).json({
       ok: true,
