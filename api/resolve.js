@@ -3,7 +3,7 @@ const ALLOWED_ORIGINS = new Set([
   'https://mavuri-api-test.vercel.app'
 ]);
 
-const RESOLVER_VERSION = '2026.08.28.04';
+const RESOLVER_VERSION = '2026.08.28.05';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -41,27 +41,24 @@ function findProductId(value) {
   return match ? match[1].toUpperCase() : null;
 }
 
-function unique(values) {
-  return [...new Set(values.filter(Boolean))];
-}
-
 function unwrapAccountVerification(value) {
   try {
     const parsed = new URL(value);
     if (!/\/gz\/account-verification/i.test(parsed.pathname)) return null;
-    const go = parsed.searchParams.get('go');
-    if (!go) return null;
-    const target = cleanUrl(go);
-    if (!isProductUrl(target)) return null;
-    return target;
+    const go = cleanUrl(parsed.searchParams.get('go'));
+    return isProductUrl(go) ? go : null;
   } catch {
     return null;
   }
 }
 
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
 function findProductUrl(html, baseUrl) {
-  const candidates = [];
   const source = String(html || '');
+  const candidates = [];
   const patterns = [
     /https?:\\?\/\\?\/[^\"'<>\\\s]+?\/p\/MLB\d+[^\"'<>\\\s]*/gi,
     /https?:\/\/[^\"'<>\s]+?\/p\/MLB\d+[^\"'<>\s]*/gi,
@@ -69,20 +66,15 @@ function findProductUrl(html, baseUrl) {
     /\"url\"\s*:\s*\"([^\"]*\/p\/MLB\d+[^\"]*)\"/gi,
     /href=[\"']([^\"']*\/p\/MLB\d+[^\"']*)[\"']/gi
   ];
-
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {
       const raw = cleanUrl(match[1] || match[0]);
-      if (!raw) continue;
       try {
         const absolute = new URL(raw, baseUrl).toString();
         if (isProductUrl(absolute)) candidates.push(absolute);
-      } catch {
-        // ignora candidato inválido
-      }
+      } catch {}
     }
   }
-
   return unique(candidates)[0] || null;
 }
 
@@ -138,17 +130,40 @@ function extractStateNumber(html, keys) {
   return null;
 }
 
-function extractProductData(html, productUrl, productId) {
-  const title = getMeta(html, ['og:title', 'twitter:title'])
-    .replace(/\s*\|\s*Mercado Livre.*$/i, '')
-    .trim();
-  const image = getMeta(html, ['og:image', 'twitter:image']);
-  const price = asNumber(getMeta(html, ['product:price:amount', 'og:price:amount']))
-    ?? extractStateNumber(html, ['price', 'current_price', 'price_amount']);
-  const previousPrice = extractStateNumber(html, ['original_price', 'previous_price', 'old_price', 'list_price']);
-  const installmentAmount = extractStateNumber(html, ['installment_amount', 'installments_amount']);
-  const installments = extractStateNumber(html, ['installments', 'installments_number', 'installment_quantity']);
+function parseJsonLd(html) {
+  const objects = [];
+  const scripts = String(html || '').matchAll(/<script[^>]+type=[\"']application\/ld\+json[\"'][^>]*>([\s\S]*?)<\/script>/gi);
+  for (const match of scripts) {
+    try {
+      const value = JSON.parse(match[1].trim());
+      const list = Array.isArray(value) ? value : Array.isArray(value?.['@graph']) ? value['@graph'] : [value];
+      objects.push(...list.filter(Boolean));
+    } catch {}
+  }
+  return objects;
+}
 
+function extractProductData(html, productUrl, productId) {
+  const jsonLd = parseJsonLd(html);
+  const productJson = jsonLd.find(item => {
+    const type = item?.['@type'];
+    return type === 'Product' || (Array.isArray(type) && type.includes('Product'));
+  }) || {};
+  const offers = Array.isArray(productJson.offers) ? productJson.offers[0] : (productJson.offers || {});
+  const title = firstString(
+    productJson.name,
+    getMeta(html, ['og:title', 'twitter:title']).replace(/\s*\|\s*Mercado Livre.*$/i, '')
+  );
+  const image = firstString(
+    Array.isArray(productJson.image) ? productJson.image[0] : productJson.image,
+    getMeta(html, ['og:image', 'twitter:image'])
+  );
+  const price = asNumber(offers.price)
+    ?? asNumber(getMeta(html, ['product:price:amount', 'og:price:amount']))
+    ?? extractStateNumber(html, ['current_price', 'sale_price', 'price_amount', 'price']);
+  const previousPrice = extractStateNumber(html, ['original_price', 'previous_price', 'old_price', 'list_price']);
+  const installments = extractStateNumber(html, ['installments_number', 'installment_quantity', 'installments']);
+  const installmentAmount = extractStateNumber(html, ['installment_amount', 'installments_amount']);
   return {
     id: productId || '',
     url: productUrl || '',
@@ -157,34 +172,10 @@ function extractProductData(html, productUrl, productId) {
     image,
     price,
     previousPrice: previousPrice && (!price || previousPrice > price) ? previousPrice : null,
-    discount: price && previousPrice && previousPrice > price
-      ? Math.round(((previousPrice - price) / previousPrice) * 100)
-      : null,
     installments: installments || null,
     installmentAmount: installmentAmount || null,
-    currency: getMeta(html, ['product:price:currency', 'og:price:currency']) || 'BRL',
-    source: 'mercadolivre-page'
-  };
-}
-
-function mergeProductData(base, extra) {
-  const price = base.price ?? extra.price ?? null;
-  const previousPrice = base.previousPrice ?? extra.previousPrice ?? null;
-  return {
-    ...base,
-    ...extra,
-    id: base.id || extra.id || '',
-    url: base.url || extra.url || '',
-    title: base.title || extra.title || '',
-    category: base.category || extra.category || '',
-    image: base.image || extra.image || '',
-    price,
-    previousPrice: previousPrice && (!price || previousPrice > price) ? previousPrice : null,
-    installments: base.installments ?? extra.installments ?? null,
-    installmentAmount: base.installmentAmount ?? extra.installmentAmount ?? null,
-    discount: base.discount ?? extra.discount ?? (price && previousPrice && previousPrice > price ? Math.round(((previousPrice - price) / previousPrice) * 100) : null),
-    currency: base.currency || extra.currency || 'BRL',
-    source: extra.source || base.source
+    currency: firstString(offers.priceCurrency, getMeta(html, ['product:price:currency', 'og:price:currency']), 'BRL'),
+    source: title || price !== null ? 'mercadolivre-page' : 'not-found'
   };
 }
 
@@ -194,8 +185,9 @@ async function follow(url) {
     redirect: 'follow',
     cache: 'no-store',
     headers: {
-      'user-agent': 'Mozilla/5.0 (compatible; MavuriResolver/1.0)',
-      'accept-language': 'pt-BR,pt;q=0.9'
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+      'accept-language': 'pt-BR,pt;q=0.9',
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
     }
   });
 }
@@ -203,12 +195,8 @@ async function follow(url) {
 async function fetchJson(url) {
   try {
     const response = await fetch(url, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-        'accept': 'application/json',
-        'user-agent': 'Mozilla/5.0 (compatible; MavuriResolver/1.0)'
-      }
+      headers: { accept: 'application/json' },
+      cache: 'no-store'
     });
     if (!response.ok) return null;
     return await response.json();
@@ -217,41 +205,24 @@ async function fetchJson(url) {
   }
 }
 
-function extractApiProduct(productId, productApi, itemsApi) {
-  const items = Array.isArray(itemsApi?.results) ? itemsApi.results : Array.isArray(itemsApi) ? itemsApi : [];
-  const normalizedItems = items
-    .map(item => item?.body || item)
-    .filter(item => item && Number.isFinite(Number(item.price)) && Number(item.price) > 0)
-    .sort((a, b) => Number(a.price) - Number(b.price));
-  const best = normalizedItems[0] || null;
-  const productPicture = Array.isArray(productApi?.pictures)
-    ? (productApi.pictures[0]?.secure_url || productApi.pictures[0]?.url || '')
-    : '';
-  const price = asNumber(best?.price);
-  const previousPrice = asNumber(best?.original_price ?? best?.regular_price ?? null);
+async function enrichCatalog(productId) {
+  if (!productId) return {};
+  const product = await fetchJson(`https://api.mercadolibre.com/products/${encodeURIComponent(productId)}`);
+  if (!product) return {};
   return {
-    id: productId || '',
-    title: firstString(productApi?.name, productApi?.title, best?.title),
-    category: firstString(productApi?.category_id, productApi?.domain_id, best?.category_id, best?.domain_id),
-    image: productPicture || best?.thumbnail || best?.secure_thumbnail || '',
-    price,
-    previousPrice: previousPrice && (!price || previousPrice > price) ? previousPrice : null,
-    discount: price && previousPrice && previousPrice > price ? Math.round(((previousPrice - price) / previousPrice) * 100) : null,
-    installments: asNumber(best?.installments ?? best?.installments_number ?? null),
-    installmentAmount: asNumber(best?.installment_amount ?? null),
-    currency: firstString(best?.currency_id, productApi?.currency_id, 'BRL'),
-    source: normalizedItems.length ? 'mercadolivre-catalog-api' : 'mercadolivre-product-api'
+    title: firstString(product.name, product.title),
+    category: firstString(product.category_id, product.domain_id),
+    image: firstString(product.pictures?.[0]?.secure_url, product.pictures?.[0]?.url, product.thumbnail)
   };
 }
 
-async function enrichFromMercadoLivreApi(productId) {
-  if (!productId) return {};
-  const base = 'https://api.mercadolibre.com';
-  const [productApi, itemsApi] = await Promise.all([
-    fetchJson(`${base}/products/${encodeURIComponent(productId)}`),
-    fetchJson(`${base}/products/${encodeURIComponent(productId)}/items`)
-  ]);
-  return extractApiProduct(productId, productApi, itemsApi);
+function mergeProduct(pageProduct, catalogProduct) {
+  return {
+    ...pageProduct,
+    title: pageProduct.title || catalogProduct.title || '',
+    category: pageProduct.category || catalogProduct.category || '',
+    image: pageProduct.image || catalogProduct.image || ''
+  };
 }
 
 export default async function handler(req, res) {
@@ -273,21 +244,11 @@ export default async function handler(req, res) {
   try {
     const first = await follow(parsed.toString());
     const socialUrl = first.url || parsed.toString();
-    const html = await first.text();
-
-    let productUrl = findProductUrl(socialUrl, socialUrl);
-    if (!productUrl) productUrl = findProductUrl(html, socialUrl);
+    const firstHtml = await first.text();
+    let productUrl = findProductUrl(socialUrl, socialUrl) || findProductUrl(firstHtml, socialUrl);
 
     if (!productUrl) {
-      return res.status(200).json({
-        ok: false,
-        affiliateUrl: parsed.toString(),
-        socialUrl,
-        productUrl: null,
-        productId: null,
-        resolverVersion: RESOLVER_VERSION,
-        message: 'O link foi resolvido até a página intermediária, mas o anúncio ainda não foi localizado automaticamente.'
-      });
+      return res.status(200).json({ ok: false, affiliateUrl: parsed.toString(), socialUrl, productUrl: null, productId: null, resolverVersion: RESOLVER_VERSION, message: 'O link foi resolvido até a página intermediária, mas o anúncio ainda não foi localizado automaticamente.' });
     }
 
     const locatedProductUrl = productUrl;
@@ -295,14 +256,30 @@ export default async function handler(req, res) {
     const redirectedUrl = productResponse.url || productUrl;
     const verificationTarget = unwrapAccountVerification(redirectedUrl);
     const finalProductUrl = verificationTarget || (isProductUrl(redirectedUrl) ? redirectedUrl : locatedProductUrl);
-    const productHtml = verificationTarget ? '' : await productResponse.text();
-    const resolvedId = findProductId(finalProductUrl) || findProductId(locatedProductUrl);
 
+    // Antes o fluxo extraía o parâmetro go, mas não carregava a página limpa.
+    // Isso deixava os campos vazios justamente quando o redirecionamento de verificação ocorria.
+    let productHtml = '';
+    try {
+      if (verificationTarget) {
+        const cleanProductResponse = await follow(verificationTarget);
+        const cleanRedirect = cleanProductResponse.url || verificationTarget;
+        productHtml = await cleanProductResponse.text();
+        if (isProductUrl(cleanRedirect)) productUrl = cleanRedirect;
+      } else {
+        productHtml = await productResponse.text();
+      }
+    } catch {}
+
+    const resolvedId = findProductId(finalProductUrl) || findProductId(locatedProductUrl);
     const pageProduct = extractProductData(productHtml, finalProductUrl, resolvedId);
-    const apiProduct = await enrichFromMercadoLivreApi(resolvedId);
-    const product = mergeProductData(pageProduct, apiProduct);
-    product.url = finalProductUrl;
+    const catalogProduct = await enrichCatalog(resolvedId);
+    const product = mergeProduct(pageProduct, catalogProduct);
     product.id = resolvedId || product.id || '';
+    product.url = finalProductUrl;
+    product.discount = product.price && product.previousPrice && product.previousPrice > product.price
+      ? Math.round(((product.previousPrice - product.price) / product.previousPrice) * 100)
+      : null;
 
     return res.status(200).json({
       ok: true,
@@ -315,15 +292,9 @@ export default async function handler(req, res) {
       verificationBypassed: Boolean(verificationTarget),
       message: product.title || product.price !== null
         ? 'Anúncio real localizado e dados principais encontrados.'
-        : 'Anúncio real localizado. O Mercado Livre redirecionou por verificação, então a URL real foi extraída do parâmetro go.'
+        : 'Anúncio real localizado, mas os dados ainda não foram encontrados na página.'
     });
   } catch (error) {
-    return res.status(502).json({
-      ok: false,
-      affiliateUrl: parsed.toString(),
-      resolverVersion: RESOLVER_VERSION,
-      message: 'Não foi possível resolver ou ler o anúncio do Mercado Livre.',
-      error: String(error?.message || error)
-    });
+    return res.status(502).json({ ok: false, affiliateUrl: parsed.toString(), resolverVersion: RESOLVER_VERSION, message: 'Não foi possível resolver ou ler o anúncio do Mercado Livre.', error: String(error?.message || error) });
   }
 }
