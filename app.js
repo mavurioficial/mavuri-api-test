@@ -1,8 +1,10 @@
 const API_BASE = "https://mavuri-api-test.vercel.app/api/meli";
 const DIAGNOSTIC_API_BASE = "https://mavuri-api-test.vercel.app/api/diagnostic";
-const APP_VERSION = "2026.08.27.07";
+const VERSION_API = "https://mavuri-api-test.vercel.app/api/version";
+const APP_VERSION = "2026.08.28.01";
 let accessToken = "";
 const resultado = document.getElementById("resultado");
+const versao = document.getElementById("versao");
 
 function mostrar(titulo, dados) {
   resultado.textContent = titulo + "\n\n" + JSON.stringify(dados, null, 2);
@@ -51,13 +53,22 @@ async function chamarApi(path, options = {}) {
   return chamarUrl(API_BASE + path, options);
 }
 
+async function carregarVersaoApi() {
+  try {
+    const data = await chamarUrl(VERSION_API);
+    versao.textContent = `APP ${APP_VERSION} · API ${data.version || "?"}`;
+  } catch {
+    versao.textContent = `APP ${APP_VERSION} · API indisponível`;
+  }
+}
+
 document.getElementById("salvarToken").addEventListener("click", () => {
   accessToken = document.getElementById("token").value.trim();
   if (!accessToken) {
     resultado.textContent = "ERRO: informe o Access Token.";
     return;
   }
-  resultado.textContent = "TOKEN CARREGADO NESTA SESSÃO.\n\nAgora teste /users/me ou faça uma busca autenticada.";
+  resultado.textContent = "TOKEN CARREGADO NESTA SESSÃO.\n\nPróximo passo: clique em TESTAR /users/me para validar o token antes de buscar produtos.";
 });
 
 document.getElementById("testarUsuario").addEventListener("click", async () => {
@@ -66,11 +77,11 @@ document.getElementById("testarUsuario").addEventListener("click", async () => {
     resultado.textContent = "ERRO: informe primeiro o Access Token.";
     return;
   }
-  resultado.textContent = "Consultando usuário autenticado pelo backend...";
+  resultado.textContent = "Validando o Access Token pelo backend...";
   try {
     mostrar("AUTENTICAÇÃO FUNCIONANDO!", await chamarApi("?action=me", { headers: headersComToken() }));
   } catch (erro) {
-    mostrarErro("ERRO AO TESTAR TOKEN", erro);
+    mostrarErro("TOKEN NÃO VALIDADO", erro);
   }
 });
 
@@ -80,7 +91,11 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
     resultado.textContent = "Digite algo para pesquisar.";
     return;
   }
-  resultado.textContent = "Buscando somente anúncios reais com preço verificável...";
+  if (!obterToken()) {
+    resultado.textContent = "INFORME E VALIDE O ACCESS TOKEN PRIMEIRO.\n\nO teste isolado confirmou que a busca pública da API do Mercado Livre está respondendo HTTP 403 a partir do backend Vercel. Agora vamos testar a rota autenticada.";
+    return;
+  }
+  resultado.textContent = "Buscando com token autenticado e verificando anúncios reais e preços...";
   try {
     const data = await chamarApi("?action=search&q=" + encodeURIComponent(busca) + "&limit=20", { headers: headersComToken() });
     const produtos = (data.results || []).map(item => ({
@@ -96,22 +111,31 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
       imagem: item.thumbnail,
       frete_gratis: item.shipping?.free_shipping || false
     }));
-    mostrar("RESULTADO DA BUSCA — APP " + APP_VERSION, {
+    mostrar("RESULTADO DA BUSCA AUTENTICADA — APP " + APP_VERSION, {
       fonte_busca: data.search_source || null,
       total: data.paging,
       produtos
     });
   } catch (erro) {
+    if (erro?.status === 401 || erro?.status === 403) {
+      mostrar("BUSCA BLOQUEADA — DIAGNÓSTICO NECESSÁRIO", {
+        status: erro.status,
+        explicacao: "A busca pública já foi confirmada como bloqueada por HTTP 403. Agora precisamos verificar se este Access Token está válido e se possui acesso às rotas de busca.",
+        resposta: erro.data || null,
+        proximo_passo: "Clique em DIAGNOSTICAR BUSCA e envie o resultado."
+      });
+      return;
+    }
     mostrarErro("ERRO AO BUSCAR PRODUTOS", erro);
   }
 });
 
 document.getElementById("diagnosticarBusca").addEventListener("click", async () => {
   const busca = document.getElementById("busca").value.trim() || "tv";
-  resultado.textContent = "APP .07: testando 5 produtos de catálogo e o pipeline completo de anúncio real...";
+  resultado.textContent = "Executando diagnóstico isolado: token, busca pública, busca autenticada, catálogo e anúncio real...";
   try {
     const data = await chamarUrl(DIAGNOSTIC_API_BASE + "?q=" + encodeURIComponent(busca), { headers: headersComToken() });
-    mostrar("DIAGNÓSTICO COMPARATIVO DA BUSCA — APP " + APP_VERSION, data);
+    mostrar("DIAGNÓSTICO COMPLETO DA API — APP " + APP_VERSION, data);
   } catch (erro) {
     mostrarErro("ERRO NO DIAGNÓSTICO", erro);
   }
@@ -125,3 +149,5 @@ document.getElementById("testarCategorias").addEventListener("click", async () =
     mostrarErro("ERRO AO CONSULTAR CATEGORIAS", erro);
   }
 });
+
+carregarVersaoApi();
