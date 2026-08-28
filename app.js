@@ -1,7 +1,7 @@
 const API_BASE = "https://mavuri-api-test.vercel.app/api/meli";
 const DIAGNOSTIC_API_BASE = "https://mavuri-api-test.vercel.app/api/diagnostic";
 const VERSION_API = "https://mavuri-api-test.vercel.app/api/version";
-const APP_VERSION = "2026.08.28.01";
+const APP_VERSION = "2026.08.28.02";
 let accessToken = "";
 const resultado = document.getElementById("resultado");
 const versao = document.getElementById("versao");
@@ -132,10 +132,10 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
 
 document.getElementById("diagnosticarBusca").addEventListener("click", async () => {
   const busca = document.getElementById("busca").value.trim() || "tv";
-  resultado.textContent = "Executando diagnóstico isolado: token, busca pública, busca autenticada, catálogo e anúncio real...";
+  resultado.textContent = "Executando diagnóstico isolado e capturando a estrutura bruta dos produtos autenticados...";
   try {
     const data = await chamarUrl(DIAGNOSTIC_API_BASE + "?q=" + encodeURIComponent(busca), { headers: headersComToken() });
-    mostrar("DIAGNÓSTICO COMPLETO DA API — APP " + APP_VERSION, data);
+    mostrar("DIAGNÓSTICO COMPLETO + AMOSTRA BRUTA DOS PRODUTOS — APP " + APP_VERSION, data);
   } catch (erro) {
     mostrarErro("ERRO NO DIAGNÓSTICO", erro);
   }
