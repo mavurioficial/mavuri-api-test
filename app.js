@@ -1,7 +1,8 @@
 const API_BASE = "https://mavuri-api-test.vercel.app/api/meli";
 const DIAGNOSTIC_API_BASE = "https://mavuri-api-test.vercel.app/api/diagnostic";
+const AFFILIATE_HUB_API = "https://mavuri-api-test.vercel.app/api/affiliates";
 const VERSION_API = "https://mavuri-api-test.vercel.app/api/version";
-const APP_VERSION = "2026.08.28.03";
+const APP_VERSION = "2026.08.28.04";
 let accessToken = "";
 const resultado = document.getElementById("resultado");
 const versao = document.getElementById("versao");
@@ -132,12 +133,22 @@ document.getElementById("buscarProdutos").addEventListener("click", async () => 
 
 document.getElementById("diagnosticarBusca").addEventListener("click", async () => {
   const busca = document.getElementById("busca").value.trim() || "tv";
-  resultado.textContent = "Executando diagnóstico v2026.08.28.03: busca autenticada, detalhes do catálogo, children_ids e buy_box_winner...";
+  resultado.textContent = "Executando diagnóstico v2026.08.28.04: busca autenticada, detalhes do catálogo, children_ids e buy_box_winner...";
   try {
     const data = await chamarUrl(DIAGNOSTIC_API_BASE + "?q=" + encodeURIComponent(busca), { headers: headersComToken() });
     mostrar("DIAGNÓSTICO COMPLETO + CATÁLOGO/CHILDREN/BUY BOX — APP " + APP_VERSION, data);
   } catch (erro) {
     mostrarErro("ERRO NO DIAGNÓSTICO", erro);
+  }
+});
+
+document.getElementById("testarHubAfiliados").addEventListener("click", async () => {
+  resultado.textContent = "Testando diretamente o container de afiliados encontrado na resposta real...";
+  try {
+    const data = await chamarUrl(AFFILIATE_HUB_API);
+    mostrar("TESTE DO HUB DE AFILIADOS — APP " + APP_VERSION, data);
+  } catch (erro) {
+    mostrarErro("ERRO NO TESTE DO HUB DE AFILIADOS", erro);
   }
 });
 
