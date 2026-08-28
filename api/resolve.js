@@ -3,7 +3,7 @@ const ALLOWED_ORIGINS = new Set([
   'https://mavuri-api-test.vercel.app'
 ]);
 
-const RESOLVER_VERSION = '2026.08.28.06';
+const RESOLVER_VERSION = '2026.08.28.07';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -63,6 +63,15 @@ function firstText(...values) {
 function firstNumber(...values) {
   for (const value of values.flat(Infinity)) {
     if (value === null || value === undefined || value === '') continue;
+    if (typeof value === 'string') {
+      const normalized = value
+        .replace(/[^0-9,.-]/g, '')
+        .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+        .replace(',', '.');
+      const number = Number(normalized);
+      if (Number.isFinite(number)) return number;
+      continue;
+    }
     const number = Number(value);
     if (Number.isFinite(number)) return number;
   }
@@ -85,7 +94,6 @@ function findProductUrl(html, baseUrl) {
     /\"url\"\s*:\s*\"([^\"]*\/p\/MLB\d+[^\"]*)\"/gi,
     /href=[\"']([^\"']*\/p\/MLB\d+[^\"']*)[\"']/gi
   ];
-
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {
       const raw = cleanUrl(match[1] || match[0]);
@@ -113,90 +121,96 @@ function getMeta(html, names) {
   return '';
 }
 
+function parseJsonBlocks(html) {
+  const values = [];
+  const source = String(html || '');
+  const scriptPattern = /<script[^>]*type=[\"']application\/(?:ld\+json|json)[\"'][^>]*>([\s\S]*?)<\/script>/gi;
+  for (const match of source.matchAll(scriptPattern)) {
+    try { values.push(JSON.parse(match[1].trim())); } catch {}
+  }
+  const assignmentPatterns = [
+    /__PRELOADED_STATE__\s*=\s*({[\s\S]*?});<\/script>/i,
+    /window\.__PRELOADED_STATE__\s*=\s*({[\s\S]*?});/i,
+    /__NEXT_DATA__[^>]*>([\s\S]*?)<\/script>/i
+  ];
+  for (const pattern of assignmentPatterns) {
+    const match = source.match(pattern);
+    if (!match?.[1]) continue;
+    try { values.push(JSON.parse(match[1])); } catch {}
+  }
+  return values;
+}
+
+function walk(value, visit, seen = new Set()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return;
+  seen.add(value);
+  visit(value);
+  if (Array.isArray(value)) {
+    for (const item of value) walk(item, visit, seen);
+  } else {
+    for (const item of Object.values(value)) walk(item, visit, seen);
+  }
+}
+
+function extractStructuredProduct(html, productUrl) {
+  const product = {
+    id: findProductId(productUrl),
+    url: productUrl,
+    title: firstText(getMeta(html, ['og:title', 'twitter:title']).replace(/\s*\|\s*Mercado Livre.*$/i, '')),
+    image: firstText(getMeta(html, ['og:image', 'twitter:image'])),
+    category: '',
+    price: null,
+    previousPrice: null,
+    installments: null,
+    installmentAmount: null,
+    currency: 'BRL',
+    source: 'mercadolivre-page-html'
+  };
+
+  const candidates = [];
+  for (const block of parseJsonBlocks(html)) walk(block, node => candidates.push(node));
+
+  for (const node of candidates) {
+    if (!node || typeof node !== 'object') continue;
+    const type = Array.isArray(node['@type']) ? node['@type'].join(' ') : String(node['@type'] || '');
+    const looksProduct = /product/i.test(type) || node.offers || node.price || node.current_price || node.title || node.name;
+    if (!looksProduct) continue;
+    const offers = Array.isArray(node.offers) ? node.offers[0] : (node.offers || {});
+    product.title = firstText(product.title, node.name, node.title);
+    product.image = firstText(product.image, Array.isArray(node.image) ? node.image[0] : node.image, node.thumbnail);
+    product.category = firstText(product.category, node.category, node.category_name);
+    product.price = firstNumber(product.price, offers.price, offers.current_price, node.price, node.current_price, node.sale_price);
+    product.previousPrice = firstNumber(product.previousPrice, offers.original_price, offers.listPrice, node.original_price, node.originalPrice, node.list_price);
+    product.currency = firstText(product.currency, offers.priceCurrency, offers.currency_id, node.currency_id, 'BRL');
+    const installments = node.installments || offers.installments || {};
+    product.installments = firstNumber(product.installments, installments.quantity, node.installments_count, node.installmentQuantity);
+    product.installmentAmount = firstNumber(product.installmentAmount, installments.amount, node.installment_amount, node.installmentAmount);
+  }
+
+  const visibleText = String(html || '').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ');
+  if (!product.price) {
+    const priceMatch = visibleText.match(/(?:R\$\s*)?([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2})?)/);
+    if (priceMatch) product.price = firstNumber(priceMatch[1]);
+  }
+
+  if (product.previousPrice && product.price && product.previousPrice <= product.price) product.previousPrice = null;
+  product.discount = product.price && product.previousPrice
+    ? Math.round(((product.previousPrice - product.price) / product.previousPrice) * 100)
+    : null;
+  return product;
+}
+
 async function follow(url) {
   return fetch(url, {
     method: 'GET',
     redirect: 'follow',
     cache: 'no-store',
     headers: {
-      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
       'accept-language': 'pt-BR,pt;q=0.9',
-      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
     }
   });
-}
-
-async function fetchJson(url) {
-  try {
-    const response = await fetch(url, {
-      headers: { accept: 'application/json' },
-      cache: 'no-store'
-    });
-    if (!response.ok) return null;
-    return await response.json();
-  } catch {
-    return null;
-  }
-}
-
-async function categoryName(categoryId) {
-  if (!categoryId) return '';
-  const category = await fetchJson(`https://api.mercadolibre.com/categories/${encodeURIComponent(categoryId)}`);
-  return firstText(category?.name, categoryId);
-}
-
-function pickCatalogOffer(payload) {
-  const list = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.results)
-      ? payload.results
-      : Array.isArray(payload?.items)
-        ? payload.items
-        : [];
-
-  // O endpoint de catálogo retorna as ofertas vinculadas ao produto.
-  // Mantemos a ordem do Mercado Livre, que é a melhor aproximação da oferta
-  // principal exibida na PDP, e exigimos item_id + preço válido.
-  return list.find(item => firstText(item?.item_id, item?.id) && firstNumber(item?.price, item?.current_price) !== null) || list[0] || null;
-}
-
-async function loadCatalogOffer(productId) {
-  const catalog = await fetchJson(`https://api.mercadolibre.com/products/${encodeURIComponent(productId)}`);
-  const offersPayload = await fetchJson(`https://api.mercadolibre.com/products/${encodeURIComponent(productId)}/items`);
-  const offer = pickCatalogOffer(offersPayload);
-  const itemId = firstText(offer?.item_id, offer?.id);
-  const item = itemId ? await fetchJson(`https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}`) : null;
-
-  const categoryId = firstText(item?.category_id, offer?.category_id, catalog?.category_id);
-  const category = await categoryName(categoryId);
-  const installments = item?.installments || offer?.installments || {};
-
-  return {
-    itemId,
-    title: firstText(item?.title, offer?.title, catalog?.name, catalog?.title),
-    category,
-    image: firstText(
-      item?.pictures?.[0]?.secure_url,
-      item?.pictures?.[0]?.url,
-      item?.thumbnail,
-      catalog?.pictures?.[0]?.secure_url,
-      catalog?.pictures?.[0]?.url,
-      catalog?.thumbnail
-    ),
-    price: firstNumber(item?.price, item?.current_price, offer?.price, offer?.current_price),
-    previousPrice: firstNumber(item?.original_price, item?.originalPrice, offer?.original_price, offer?.originalPrice),
-    installments: firstNumber(installments?.quantity, item?.installments_count, offer?.installments_count),
-    installmentAmount: firstNumber(installments?.amount, item?.installment_amount, offer?.installment_amount),
-    currency: firstText(item?.currency_id, offer?.currency_id, 'BRL')
-  };
-}
-
-function extractPageFallback(html, productUrl) {
-  return {
-    title: firstText(getMeta(html, ['og:title', 'twitter:title']).replace(/\s*\|\s*Mercado Livre.*$/i, '')),
-    image: firstText(getMeta(html, ['og:image', 'twitter:image'])),
-    url: productUrl
-  };
 }
 
 export default async function handler(req, res) {
@@ -208,11 +222,8 @@ export default async function handler(req, res) {
   if (!affiliateUrl) return res.status(400).json({ message: 'Informe o parâmetro url.' });
 
   let parsed;
-  try {
-    parsed = new URL(affiliateUrl);
-  } catch {
-    return res.status(400).json({ message: 'URL inválida.' });
-  }
+  try { parsed = new URL(affiliateUrl); }
+  catch { return res.status(400).json({ message: 'URL inválida.' }); }
 
   if (!isMercadoLivreHost(parsed.toString())) {
     return res.status(400).json({ message: 'Por segurança, somente links do Mercado Livre e meli.la são aceitos.' });
@@ -222,89 +233,36 @@ export default async function handler(req, res) {
     const first = await follow(parsed.toString());
     const socialUrl = first.url || parsed.toString();
     const firstHtml = await first.text();
-    let productUrl = findProductUrl(socialUrl, socialUrl) || findProductUrl(firstHtml, socialUrl);
+    const productUrl = findProductUrl(socialUrl, socialUrl) || findProductUrl(firstHtml, socialUrl);
 
     if (!productUrl) {
-      return res.status(200).json({
-        ok: false,
-        affiliateUrl: parsed.toString(),
-        socialUrl,
-        productUrl: null,
-        productId: null,
-        resolverVersion: RESOLVER_VERSION,
-        message: 'O link foi resolvido até a página intermediária, mas o anúncio ainda não foi localizado automaticamente.'
-      });
+      return res.status(200).json({ ok: false, affiliateUrl: parsed.toString(), socialUrl, productUrl: null, productId: null, resolverVersion: RESOLVER_VERSION, message: 'O link foi resolvido até a página intermediária, mas o anúncio ainda não foi localizado automaticamente.' });
     }
 
-    const locatedProductUrl = productUrl;
     const productResponse = await follow(productUrl);
     const redirectedUrl = productResponse.url || productUrl;
     const verificationTarget = unwrapAccountVerification(redirectedUrl);
-    const finalProductUrl = verificationTarget || (isProductUrl(redirectedUrl) ? redirectedUrl : locatedProductUrl);
-
-    let pageHtml = '';
-    try {
-      const pageResponse = verificationTarget ? await follow(verificationTarget) : productResponse;
-      pageHtml = await pageResponse.text();
-    } catch {}
-
-    const productId = findProductId(finalProductUrl) || findProductId(locatedProductUrl);
-    if (!productId) {
-      return res.status(200).json({
-        ok: false,
-        affiliateUrl: parsed.toString(),
-        socialUrl,
-        productUrl: finalProductUrl,
-        productId: null,
-        resolverVersion: RESOLVER_VERSION,
-        message: 'O anúncio foi localizado, mas não foi possível identificar o produto do catálogo.'
-      });
-    }
-
-    // Fluxo B: a página /p/MLB... é uma PDP de catálogo. Em vez de depender
-    // somente do HTML, buscamos as ofertas reais vinculadas ao catálogo e então
-    // carregamos o item vencedor para obter preço, preço anterior e parcelas.
-    const offerData = await loadCatalogOffer(productId);
-    const pageFallback = extractPageFallback(pageHtml, finalProductUrl);
-    const product = {
-      id: productId,
-      itemId: offerData.itemId,
-      url: finalProductUrl,
-      title: firstText(offerData.title, pageFallback.title),
-      category: offerData.category,
-      image: firstText(offerData.image, pageFallback.image),
-      price: offerData.price,
-      previousPrice: offerData.previousPrice && offerData.price && offerData.previousPrice > offerData.price ? offerData.previousPrice : null,
-      installments: offerData.installments,
-      installmentAmount: offerData.installmentAmount,
-      currency: offerData.currency,
-      source: 'mercadolivre-catalog-offer'
-    };
-
-    product.discount = product.price && product.previousPrice
-      ? Math.round(((product.previousPrice - product.price) / product.previousPrice) * 100)
-      : null;
+    const finalProductUrl = verificationTarget || (isProductUrl(redirectedUrl) ? redirectedUrl : productUrl);
+    const pageResponse = verificationTarget ? await follow(verificationTarget) : productResponse;
+    const pageHtml = await pageResponse.text();
+    const product = extractStructuredProduct(pageHtml, finalProductUrl);
+    const hasData = Boolean(product.title || product.price !== null || product.image);
 
     return res.status(200).json({
       ok: true,
       affiliateUrl: parsed.toString(),
       socialUrl,
       productUrl: finalProductUrl,
-      productId,
+      productId: product.id,
       product,
       resolverVersion: RESOLVER_VERSION,
       verificationBypassed: Boolean(verificationTarget),
-      message: product.price !== null || product.title
-        ? 'Anúncio localizado e oferta do catálogo consultada com sucesso.'
-        : 'Anúncio localizado, mas nenhuma oferta ativa foi retornada para o produto.'
+      pageRead: hasData,
+      message: hasData
+        ? 'Anúncio específico localizado e dados extraídos diretamente do HTML da página.'
+        : 'Anúncio específico localizado, mas o Mercado Livre não entregou o HTML do produto para este acesso automatizado.'
     });
   } catch (error) {
-    return res.status(502).json({
-      ok: false,
-      affiliateUrl: parsed.toString(),
-      resolverVersion: RESOLVER_VERSION,
-      message: 'Não foi possível resolver ou consultar o anúncio do Mercado Livre.',
-      error: String(error?.message || error)
-    });
+    return res.status(502).json({ ok: false, affiliateUrl: parsed.toString(), resolverVersion: RESOLVER_VERSION, message: 'Não foi possível resolver ou ler o HTML do anúncio específico.', error: String(error?.message || error) });
   }
 }
