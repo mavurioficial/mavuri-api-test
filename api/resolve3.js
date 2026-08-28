@@ -4,7 +4,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 const BASE_RESOLVER = 'https://mavuri-api-test.vercel.app/api/resolve';
-const RESOLVER_VERSION = '2026.08.28.11';
+const RESOLVER_VERSION = '2026.08.28.12';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -27,7 +27,8 @@ function firstText(...values) {
 function firstNumber(...values) {
   for (const value of values.flat(Infinity)) {
     if (value === null || value === undefined || value === '') continue;
-    const number = Number(value);
+    const normalized = String(value).replace(/[^0-9,.-]/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');
+    const number = Number(normalized);
     if (Number.isFinite(number)) return number;
   }
   return null;
@@ -42,6 +43,17 @@ function queryFromUrl(productUrl) {
       : '';
   } catch {
     return '';
+  }
+}
+
+function cleanProductUrl(productUrl) {
+  try {
+    const url = new URL(productUrl);
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return productUrl;
   }
 }
 
@@ -73,6 +85,83 @@ async function readJson(url) {
     return await response.json();
   } catch {
     return null;
+  }
+}
+
+function getMeta(html, names) {
+  for (const name of names) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const patterns = [
+      new RegExp(`<meta[^>]+(?:property|name)=[\"']${escaped}[\"'][^>]+content=[\"']([^\"']*)[\"'][^>]*>`, 'i'),
+      new RegExp(`<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:property|name)=[\"']${escaped}[\"'][^>]*>`, 'i')
+    ];
+    for (const pattern of patterns) {
+      const match = String(html || '').match(pattern);
+      if (match?.[1]) return match[1].replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
+    }
+  }
+  return '';
+}
+
+function extractJsonLd(html) {
+  const list = [];
+  for (const match of String(html || '').matchAll(/<script[^>]+type=[\"']application\/ld\+json[\"'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      const values = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.['@graph']) ? parsed['@graph'] : [parsed];
+      list.push(...values.filter(Boolean));
+    } catch {}
+  }
+  return list;
+}
+
+function extractPageProduct(html) {
+  const objects = extractJsonLd(html);
+  const product = objects.find(item => item?.['@type'] === 'Product' || (Array.isArray(item?.['@type']) && item['@type'].includes('Product'))) || {};
+  const offers = Array.isArray(product.offers) ? product.offers[0] : (product.offers || {});
+  const title = firstText(product.name, getMeta(html, ['og:title', 'twitter:title']).replace(/\s*\|\s*Mercado Livre.*$/i, ''));
+  const price = firstNumber(offers.price, getMeta(html, ['product:price:amount', 'og:price:amount']));
+  const image = firstText(Array.isArray(product.image) ? product.image[0] : product.image, getMeta(html, ['og:image', 'twitter:image']));
+  return {
+    title,
+    price,
+    image,
+    previousPrice: null,
+    installments: null,
+    installmentAmount: null,
+    category: '',
+    currency: firstText(offers.priceCurrency, getMeta(html, ['product:price:currency', 'og:price:currency']), 'BRL'),
+    source: title || price !== null ? 'mercadolivre-direct-page' : 'not-found'
+  };
+}
+
+async function readDirectProductPage(productUrl) {
+  const cleanUrl = cleanProductUrl(productUrl);
+  const diagnostics = { attempted: Boolean(cleanUrl), status: null, finalUrl: '', blocked: false, readable: false };
+  if (!cleanUrl) return { product: {}, diagnostics };
+
+  try {
+    const response = await fetch(cleanUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      cache: 'no-store',
+      headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'accept-language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'referer': 'https://www.google.com/'
+      }
+    });
+    diagnostics.status = response.status;
+    diagnostics.finalUrl = response.url || cleanUrl;
+    diagnostics.blocked = response.status === 401 || response.status === 403 || /account-verification/i.test(diagnostics.finalUrl);
+    const html = await response.text();
+    const product = extractPageProduct(html);
+    diagnostics.readable = Boolean(product.title || product.price !== null);
+    return { product, diagnostics };
+  } catch (error) {
+    diagnostics.error = String(error?.message || error);
+    return { product: {}, diagnostics };
   }
 }
 
@@ -131,11 +220,25 @@ export default async function handler(req, res) {
 
     const product = { ...(payload.product || {}) };
     const productId = String(payload.productId || product.id || '').toUpperCase();
-    const query = queryFromUrl(payload.productUrl || product.url || '');
+    const productUrl = cleanProductUrl(payload.productUrl || product.url || '');
+    const query = queryFromUrl(productUrl);
 
-    // IMPORTANTE: não usamos mais "tem título" como sinal de sucesso.
-    // O resolver base normalmente consegue o nome pelo catálogo, mas preço e
-    // categoria continuam vazios. A busca deve rodar sempre que faltar preço.
+    // Opção A: primeiro tenta abrir diretamente a página real limpa e extrair
+    // os dados estruturados presentes no HTML (JSON-LD/meta tags).
+    const direct = productUrl ? await readDirectProductPage(productUrl) : { product: {}, diagnostics: { attempted: false } };
+    const page = direct.product || {};
+    product.title = firstText(page.title, product.title);
+    product.price = firstNumber(page.price, product.price);
+    product.previousPrice = firstNumber(page.previousPrice, product.previousPrice);
+    product.installments = firstNumber(page.installments, product.installments);
+    product.installmentAmount = firstNumber(page.installmentAmount, product.installmentAmount);
+    product.image = firstText(page.image, product.image);
+    product.category = firstText(page.category, product.category);
+    product.currency = firstText(page.currency, product.currency, 'BRL');
+    if (page.title || page.price !== null) product.source = page.source;
+
+    // Só usa a busca estruturada anterior como complemento quando a leitura
+    // direta da página não conseguiu trazer os campos necessários.
     const needsOfferData = product.price === null || product.price === undefined || !product.category || !product.installments;
     const offer = needsOfferData && query ? await searchOffer(query, productId) : null;
 
@@ -150,11 +253,11 @@ export default async function handler(req, res) {
       product.installments = firstNumber(product.installments, installments.quantity, offer.installments_count);
       product.installmentAmount = firstNumber(product.installmentAmount, installments.amount);
       product.currency = firstText(product.currency, offer.currency_id, 'BRL');
-      product.source = 'mercadolivre-public-search';
+      if (!page.title && page.price === null) product.source = 'mercadolivre-public-search';
     }
 
     product.id = productId || product.id || '';
-    product.url = payload.productUrl || product.url || '';
+    product.url = productUrl || payload.productUrl || product.url || '';
     product.discount = product.price && product.previousPrice && product.previousPrice > product.price
       ? Math.round(((product.previousPrice - product.price) / product.previousPrice) * 100)
       : null;
@@ -171,11 +274,14 @@ export default async function handler(req, res) {
       ...payload,
       product,
       resolverVersion: RESOLVER_VERSION,
+      directPageAttempted: Boolean(direct.diagnostics?.attempted),
+      directPageRead: Boolean(direct.diagnostics?.readable),
+      directPageDiagnostics: direct.diagnostics,
       offerSearchUsed: Boolean(needsOfferData),
       offerFound: Boolean(offer),
       message: loaded.length
         ? `Anúncio localizado e dados preenchidos: ${loaded.join(', ')}.`
-        : 'Anúncio localizado, mas a busca pública não encontrou uma oferta correspondente.'
+        : 'Anúncio localizado, mas a página real não disponibilizou dados legíveis para o servidor e a busca complementar não encontrou uma oferta correspondente.'
     });
   } catch (error) {
     return res.status(502).json({
