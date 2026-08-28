@@ -3,7 +3,7 @@ const ALLOWED_ORIGINS = new Set([
   'https://mavuri-api-test.vercel.app'
 ]);
 
-const RESOLVER_VERSION = '2026.08.28.03';
+const RESOLVER_VERSION = '2026.08.28.04';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -15,6 +15,14 @@ function cors(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
+function cleanUrl(value) {
+  return String(value || '')
+    .replace(/\\u002F/gi, '/')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/g, '&')
+    .trim();
+}
+
 function isMercadoLivreHost(value) {
   try {
     const host = new URL(value).hostname.toLowerCase();
@@ -24,20 +32,36 @@ function isMercadoLivreHost(value) {
   }
 }
 
-function cleanUrl(value) {
-  return String(value || '')
-    .replace(/\\u002F/gi, '/')
-    .replace(/\\\//g, '/')
-    .replace(/&amp;/g, '&')
-    .trim();
+function isProductUrl(value) {
+  return isMercadoLivreHost(value) && /\/p\/MLB\d+/i.test(String(value || ''));
+}
+
+function findProductId(value) {
+  const match = String(value || '').match(/\/p\/(MLB\d+)/i);
+  return match ? match[1].toUpperCase() : null;
 }
 
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function unwrapAccountVerification(value) {
+  try {
+    const parsed = new URL(value);
+    if (!/\/gz\/account-verification/i.test(parsed.pathname)) return null;
+    const go = parsed.searchParams.get('go');
+    if (!go) return null;
+    const target = cleanUrl(go);
+    if (!isProductUrl(target)) return null;
+    return target;
+  } catch {
+    return null;
+  }
+}
+
 function findProductUrl(html, baseUrl) {
   const candidates = [];
+  const source = String(html || '');
   const patterns = [
     /https?:\\?\/\\?\/[^\"'<>\\\s]+?\/p\/MLB\d+[^\"'<>\\\s]*/gi,
     /https?:\/\/[^\"'<>\s]+?\/p\/MLB\d+[^\"'<>\s]*/gi,
@@ -47,12 +71,12 @@ function findProductUrl(html, baseUrl) {
   ];
 
   for (const pattern of patterns) {
-    for (const match of String(html || '').matchAll(pattern)) {
+    for (const match of source.matchAll(pattern)) {
       const raw = cleanUrl(match[1] || match[0]);
       if (!raw) continue;
       try {
         const absolute = new URL(raw, baseUrl).toString();
-        if (isMercadoLivreHost(absolute) && /\/p\/MLB\d+/i.test(absolute)) candidates.push(absolute);
+        if (isProductUrl(absolute)) candidates.push(absolute);
       } catch {
         // ignora candidato inválido
       }
@@ -60,11 +84,6 @@ function findProductUrl(html, baseUrl) {
   }
 
   return unique(candidates)[0] || null;
-}
-
-function findProductId(value) {
-  const match = String(value || '').match(/\/p\/(MLB\d+)/i);
-  return match ? match[1].toUpperCase() : null;
 }
 
 function decodeHtml(value) {
@@ -85,7 +104,7 @@ function getMeta(html, names) {
       new RegExp(`<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:property|name)=[\"']${escaped}[\"'][^>]*>`, 'i')
     ];
     for (const pattern of patterns) {
-      const match = String(html).match(pattern);
+      const match = String(html || '').match(pattern);
       if (match?.[1]) return decodeHtml(match[1]);
     }
   }
@@ -94,26 +113,12 @@ function getMeta(html, names) {
 
 function asNumber(value) {
   if (value === null || value === undefined || value === '') return null;
-  const normalized = String(value).replace(/[^0-9,.-]/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');
+  const normalized = String(value)
+    .replace(/[^0-9,.-]/g, '')
+    .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+    .replace(',', '.');
   const number = Number(normalized);
   return Number.isFinite(number) ? number : null;
-}
-
-function parseJsonLd(html) {
-  const scripts = String(html).match(/<script[^>]+type=[\"']application\/ld\+json[\"'][^>]*>([\s\S]*?)<\/script>/gi) || [];
-  const values = [];
-  for (const script of scripts) {
-    const body = script.replace(/^.*?>/s, '').replace(/<\/script>$/i, '').trim();
-    try { values.push(JSON.parse(body)); } catch { /* JSON-LD opcional */ }
-  }
-  return values;
-}
-
-function walk(value, callback) {
-  if (!value || typeof value !== 'object') return;
-  callback(value);
-  if (Array.isArray(value)) value.forEach(item => walk(item, callback));
-  else Object.values(value).forEach(item => walk(item, callback));
 }
 
 function firstString(...values) {
@@ -126,7 +131,7 @@ function firstString(...values) {
 function extractStateNumber(html, keys) {
   for (const key of keys) {
     const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = String(html).match(new RegExp(`[\"']${escaped}[\"']\\s*:\\s*[\"']?([0-9]+(?:[.,][0-9]+)?)[\"']?`, 'i'));
+    const match = String(html || '').match(new RegExp(`[\"']${escaped}[\"']\\s*:\\s*[\"']?([0-9]+(?:[.,][0-9]+)?)[\"']?`, 'i'));
     const value = asNumber(match?.[1]);
     if (value !== null) return value;
   }
@@ -134,49 +139,30 @@ function extractStateNumber(html, keys) {
 }
 
 function extractProductData(html, productUrl, productId) {
-  const metaTitle = getMeta(html, ['og:title', 'twitter:title']);
-  const metaImage = getMeta(html, ['og:image', 'twitter:image']);
-  const metaPrice = asNumber(getMeta(html, ['product:price:amount', 'og:price:amount']));
-  const metaCurrency = getMeta(html, ['product:price:currency', 'og:price:currency']);
-
-  let jsonProduct = null;
-  let jsonOffer = null;
-  let category = '';
-  for (const json of parseJsonLd(html)) {
-    walk(json, node => {
-      const type = node['@type'];
-      const types = Array.isArray(type) ? type : [type];
-      if (!jsonProduct && types.includes('Product')) jsonProduct = node;
-      if (!jsonOffer && types.some(item => String(item).toLowerCase() === 'offer')) jsonOffer = node;
-      if (!category && typeof node.category === 'string') category = node.category;
-    });
-  }
-
-  const offers = jsonProduct?.offers || jsonOffer || {};
-  const title = firstString(jsonProduct?.name, metaTitle).replace(/\s*\|\s*Mercado Livre.*$/i, '').trim();
-  const image = firstString(jsonProduct?.image, metaImage);
-  const price = asNumber(firstString(offers?.price, offers?.lowPrice, metaPrice))
+  const title = getMeta(html, ['og:title', 'twitter:title'])
+    .replace(/\s*\|\s*Mercado Livre.*$/i, '')
+    .trim();
+  const image = getMeta(html, ['og:image', 'twitter:image']);
+  const price = asNumber(getMeta(html, ['product:price:amount', 'og:price:amount']))
     ?? extractStateNumber(html, ['price', 'current_price', 'price_amount']);
   const previousPrice = extractStateNumber(html, ['original_price', 'previous_price', 'old_price', 'list_price']);
   const installmentAmount = extractStateNumber(html, ['installment_amount', 'installments_amount']);
   const installments = extractStateNumber(html, ['installments', 'installments_number', 'installment_quantity']);
-  const currency = firstString(offers?.priceCurrency, metaCurrency, 'BRL');
-  const discount = price && previousPrice && previousPrice > price
-    ? Math.round(((previousPrice - price) / previousPrice) * 100)
-    : extractStateNumber(html, ['discount_percentage']);
 
   return {
     id: productId || '',
     url: productUrl || '',
     title,
-    category: firstString(jsonProduct?.category, category),
+    category: '',
     image,
     price,
     previousPrice: previousPrice && (!price || previousPrice > price) ? previousPrice : null,
-    discount: discount || null,
+    discount: price && previousPrice && previousPrice > price
+      ? Math.round(((previousPrice - price) / previousPrice) * 100)
+      : null,
     installments: installments || null,
     installmentAmount: installmentAmount || null,
-    currency,
+    currency: getMeta(html, ['product:price:currency', 'og:price:currency']) || 'BRL',
     source: 'mercadolivre-page'
   };
 }
@@ -241,29 +227,19 @@ function extractApiProduct(productId, productApi, itemsApi) {
   const productPicture = Array.isArray(productApi?.pictures)
     ? (productApi.pictures[0]?.secure_url || productApi.pictures[0]?.url || '')
     : '';
-  const image = productPicture || best?.thumbnail || best?.secure_thumbnail || '';
   const price = asNumber(best?.price);
   const previousPrice = asNumber(best?.original_price ?? best?.regular_price ?? null);
-  const title = firstString(productApi?.name, productApi?.title, best?.title);
-  const category = firstString(productApi?.category_id, productApi?.domain_id, best?.category_id, best?.domain_id);
-  const currency = firstString(best?.currency_id, productApi?.currency_id, 'BRL');
-  const installments = asNumber(best?.installments ?? best?.installments_number ?? null);
-  const installmentAmount = asNumber(best?.installment_amount ?? null);
-  const discount = price && previousPrice && previousPrice > price
-    ? Math.round(((previousPrice - price) / previousPrice) * 100)
-    : null;
-
   return {
     id: productId || '',
-    title,
-    category,
-    image,
+    title: firstString(productApi?.name, productApi?.title, best?.title),
+    category: firstString(productApi?.category_id, productApi?.domain_id, best?.category_id, best?.domain_id),
+    image: productPicture || best?.thumbnail || best?.secure_thumbnail || '',
     price,
     previousPrice: previousPrice && (!price || previousPrice > price) ? previousPrice : null,
-    discount,
-    installments,
-    installmentAmount,
-    currency,
+    discount: price && previousPrice && previousPrice > price ? Math.round(((previousPrice - price) / previousPrice) * 100) : null,
+    installments: asNumber(best?.installments ?? best?.installments_number ?? null),
+    installmentAmount: asNumber(best?.installment_amount ?? null),
+    currency: firstString(best?.currency_id, productApi?.currency_id, 'BRL'),
     source: normalizedItems.length ? 'mercadolivre-catalog-api' : 'mercadolivre-product-api'
   };
 }
@@ -301,7 +277,6 @@ export default async function handler(req, res) {
 
     let productUrl = findProductUrl(socialUrl, socialUrl);
     if (!productUrl) productUrl = findProductUrl(html, socialUrl);
-    const productId = findProductId(productUrl);
 
     if (!productUrl) {
       return res.status(200).json({
@@ -315,10 +290,14 @@ export default async function handler(req, res) {
       });
     }
 
+    const locatedProductUrl = productUrl;
     const productResponse = await follow(productUrl);
-    const finalProductUrl = productResponse.url || productUrl;
-    const productHtml = await productResponse.text();
-    const resolvedId = productId || findProductId(finalProductUrl);
+    const redirectedUrl = productResponse.url || productUrl;
+    const verificationTarget = unwrapAccountVerification(redirectedUrl);
+    const finalProductUrl = verificationTarget || (isProductUrl(redirectedUrl) ? redirectedUrl : locatedProductUrl);
+    const productHtml = verificationTarget ? '' : await productResponse.text();
+    const resolvedId = findProductId(finalProductUrl) || findProductId(locatedProductUrl);
+
     const pageProduct = extractProductData(productHtml, finalProductUrl, resolvedId);
     const apiProduct = await enrichFromMercadoLivreApi(resolvedId);
     const product = mergeProductData(pageProduct, apiProduct);
@@ -333,9 +312,10 @@ export default async function handler(req, res) {
       productId: product.id,
       product,
       resolverVersion: RESOLVER_VERSION,
+      verificationBypassed: Boolean(verificationTarget),
       message: product.title || product.price !== null
-        ? 'Anúncio e dados principais do produto localizados.'
-        : 'Anúncio localizado. Alguns dados ainda não puderam ser lidos automaticamente.'
+        ? 'Anúncio real localizado e dados principais encontrados.'
+        : 'Anúncio real localizado. O Mercado Livre redirecionou por verificação, então a URL real foi extraída do parâmetro go.'
     });
   } catch (error) {
     return res.status(502).json({
