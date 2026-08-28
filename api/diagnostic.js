@@ -1,5 +1,5 @@
 const MeliApi = "https://api.mercadolibre.com";
-const APP_LOGIC = "2026.08.28.02";
+const APP_LOGIC = "2026.08.28.03";
 
 function cors(req, res) {
   const origin = req.headers.origin || "";
@@ -42,18 +42,27 @@ function itemSummary(data) {
   } : null;
 }
 
+function winnerSummary(winner) {
+  return winner && typeof winner === "object" ? {
+    item_id: winner.item_id || null,
+    price: winner.price ?? null,
+    currency_id: winner.currency_id || null,
+    category_id: winner.category_id || null,
+    seller_id: winner.seller_id || null,
+    shipping: winner.shipping || null
+  } : null;
+}
+
 function productSummary(product) {
   return {
     id: product?.id || null,
     name: product?.name || product?.title || null,
+    status: product?.status || null,
     domain_id: product?.domain_id || null,
-    buy_box_winner: product?.buy_box_winner || null
+    parent_id: product?.parent_id || null,
+    children_ids: Array.isArray(product?.children_ids) ? product.children_ids : [],
+    buy_box_winner: winnerSummary(product?.buy_box_winner)
   };
-}
-
-function productRawSample(product) {
-  if (!product || typeof product !== "object") return product;
-  return product;
 }
 
 async function probeRealItem(req, itemId) {
@@ -71,6 +80,63 @@ async function probeRealItem(req, itemId) {
     sale_price: { status: salePrice.response.status, ok: salePrice.response.ok, sample: salePrice.response.ok ? salePrice.data : null, error: salePrice.response.ok ? null : salePrice.data },
     prices: { status: prices.response.status, ok: prices.response.ok, sample: prices.response.ok ? prices.data?.prices || prices.data : null, error: prices.response.ok ? null : prices.data }
   };
+}
+
+async function probeCatalogProduct(req, product) {
+  const productId = product?.id;
+  if (!productId) return null;
+
+  const detail = await call(req, `${MeliApi}/products/${encodeURIComponent(productId)}`, true);
+  const detailData = detail.response.ok ? detail.data : null;
+  const childIds = Array.isArray(detailData?.children_ids) ? detailData.children_ids.slice(0, 5) : [];
+
+  const children = [];
+  for (const childId of childIds) {
+    const child = await call(req, `${MeliApi}/products/${encodeURIComponent(childId)}`, true);
+    const childData = child.response.ok ? child.data : null;
+    const winner = childData?.buy_box_winner;
+    const entry = {
+      id: childId,
+      status: child.response.status,
+      ok: child.response.ok,
+      product: childData ? productSummary(childData) : null,
+      error: child.response.ok ? null : child.data
+    };
+    if (winner?.item_id) entry.real_item_probe = await probeRealItem(req, winner.item_id);
+    children.push(entry);
+  }
+
+  const offers = await call(req, `${MeliApi}/products/${encodeURIComponent(productId)}/items`, true);
+  const offerResults = Array.isArray(offers.data?.results) ? offers.data.results : [];
+  const sampleOffer = offerResults.find(x => typeof x?.item_id === "string" && /^MLB\d+$/.test(x.item_id)) || null;
+
+  const result = {
+    name: "catalog_product_probe",
+    product: productSummary(product),
+    detail: {
+      status: detail.response.status,
+      ok: detail.response.ok,
+      summary: detailData ? productSummary(detailData) : null,
+      error: detail.response.ok ? null : detail.data
+    },
+    children_probed: children,
+    product_items: {
+      status: offers.response.status,
+      ok: offers.response.ok,
+      result_count: offerResults.length,
+      sample_offer: sampleOffer ? {
+        item_id: sampleOffer.item_id,
+        price: sampleOffer.price ?? null,
+        original_price: sampleOffer.original_price ?? sampleOffer.regular_amount ?? null,
+        currency_id: sampleOffer.currency_id || null
+      } : null,
+      error: offers.response.ok ? null : offers.data
+    }
+  };
+
+  if (detailData?.buy_box_winner?.item_id) result.detail_winner_probe = await probeRealItem(req, detailData.buy_box_winner.item_id);
+  if (sampleOffer?.item_id) result.real_item_probe = await probeRealItem(req, sampleOffer.item_id);
+  return result;
 }
 
 export default async function handler(req, res) {
@@ -96,7 +162,7 @@ export default async function handler(req, res) {
 
       const products = await call(req, `${MeliApi}/products/search?status=active&site_id=MLB&q=${encodeURIComponent(q)}&limit=5`, true);
       authenticatedProductsSample = products.response.ok && Array.isArray(products.data?.results)
-        ? products.data.results.slice(0, 5).map(productRawSample)
+        ? products.data.results.slice(0, 5)
         : [];
       results.push({
         name: "products_search_authenticated",
@@ -109,20 +175,8 @@ export default async function handler(req, res) {
 
       if (products.response.ok && Array.isArray(products.data?.results)) {
         for (const product of products.data.results.slice(0, 5)) {
-          const productId = product?.id;
-          if (!productId) continue;
-          const detail = await call(req, `${MeliApi}/products/${encodeURIComponent(productId)}`, true);
-          const offers = await call(req, `${MeliApi}/products/${encodeURIComponent(productId)}/items`, true);
-          const offerResults = Array.isArray(offers.data?.results) ? offers.data.results : [];
-          const sampleOffer = offerResults.find(x => typeof x?.item_id === "string" && /^MLB\d+$/.test(x.item_id)) || null;
-          const entry = {
-            name: "catalog_product_probe",
-            product: productSummary(product),
-            detail: { status: detail.response.status, ok: detail.response.ok, buy_box_winner: detail.response.ok ? detail.data?.buy_box_winner || null : null, error: detail.response.ok ? null : detail.data },
-            product_items: { status: offers.response.status, ok: offers.response.ok, result_count: offerResults.length, sample_offer: sampleOffer ? { item_id: sampleOffer.item_id, price: sampleOffer.price ?? null, original_price: sampleOffer.original_price ?? sampleOffer.regular_amount ?? null, currency_id: sampleOffer.currency_id || null } : null, error: offers.response.ok ? null : offers.data }
-          };
-          if (sampleOffer?.item_id) entry.real_item_probe = await probeRealItem(req, sampleOffer.item_id);
-          results.push(entry);
+          const probe = await probeCatalogProduct(req, product);
+          if (probe) results.push(probe);
         }
       }
 
