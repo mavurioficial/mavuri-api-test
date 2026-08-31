@@ -4,7 +4,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 const BASE_RESOLVER = 'https://mavuri-api-test.vercel.app/api/resolve3';
-const RESOLVER_VERSION = '2026.08.28.14';
+const RESOLVER_VERSION = '2026.08.31.01';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -72,8 +72,6 @@ function chooseOffer(payload) {
   const candidates = list.filter(Boolean);
   if (!candidates.length) return null;
 
-  // Em página de catálogo há várias ofertas. Para a divulgação usamos a melhor
-  // oferta pública disponível, priorizando o menor preço válido.
   return candidates
     .filter(item => firstNumber(item.price, item.current_price) !== null)
     .sort((a, b) => firstNumber(a.price, a.current_price) - firstNumber(b.price, b.current_price))[0]
@@ -92,7 +90,9 @@ async function enrichCatalog(productId, productUrl, current) {
   const id = String(productId || '').trim().toUpperCase();
 
   // O ID /p/MLB... é ID de produto de catálogo, não necessariamente item_id.
-  // Por isso consulta o recurso de produto e depois as ofertas ligadas a ele.
+  // Primeiro localizamos o produto vencedor e depois consultamos o anúncio vencedor
+  // para obter dados que podem não existir no recurso de catálogo, como categoria
+  // e preço promocional/regular.
   if (/^MLB\d+$/.test(id)) {
     const catalog = await readJson(`https://api.mercadolibre.com/products/${encodeURIComponent(id)}`);
     if (catalog) {
@@ -129,6 +129,41 @@ async function enrichCatalog(productId, productUrl, current) {
     }
   }
 
+  // O item vencedor é a fonte mais confiável para categoria e preço promocional.
+  // O endpoint /sale_price informa amount + regular_amount quando há promoção.
+  const itemId = String(product.itemId || '').trim().toUpperCase();
+  if (/^MLB\d+$/.test(itemId)) {
+    const item = await readJson(`https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}`);
+    if (item) {
+      product.title = firstText(product.title, item.title);
+      product.category = firstText(product.category, item.category_id);
+      product.price = firstNumber(product.price, item.price, item.current_price);
+      product.previousPrice = firstNumber(product.previousPrice, item.original_price);
+      product.currency = firstText(product.currency, item.currency_id, 'BRL');
+      product.installments = firstNumber(
+        product.installments,
+        item.installments?.quantity,
+        item.installments_count,
+        item.installmentQuantity
+      );
+      product.installmentAmount = firstNumber(
+        product.installmentAmount,
+        item.installments?.amount,
+        item.installment_amount,
+        item.installmentAmount
+      );
+    }
+
+    const salePrice = await readJson(
+      `https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}/sale_price?context=channel_marketplace`
+    );
+    if (salePrice) {
+      product.price = firstNumber(product.price, salePrice.amount);
+      product.previousPrice = firstNumber(product.previousPrice, salePrice.regular_amount);
+      product.currency = firstText(product.currency, salePrice.currency_id, 'BRL');
+    }
+  }
+
   product.title = firstText(product.title, titleFromUrl(productUrl));
   product.category = await categoryName(product.category);
   product.id = id || product.id || '';
@@ -137,7 +172,7 @@ async function enrichCatalog(productId, productUrl, current) {
   product.discount = product.price && product.previousPrice && product.previousPrice > product.price
     ? Math.round(((product.previousPrice - product.price) / product.previousPrice) * 100)
     : null;
-  product.source = 'catalog-product-api';
+  product.source = 'catalog-product-api+item-sale-price';
 
   return product;
 }
@@ -165,6 +200,7 @@ export default async function handler(req, res) {
       product.category && 'categoria',
       product.price !== null && product.price !== undefined && 'preço',
       product.previousPrice !== null && product.previousPrice !== undefined && 'preço anterior',
+      product.discount !== null && product.discount !== undefined && 'desconto',
       product.installments !== null && product.installments !== undefined && 'parcelas'
     ].filter(Boolean);
 
