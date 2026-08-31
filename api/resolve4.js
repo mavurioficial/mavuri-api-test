@@ -4,7 +4,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 const BASE_RESOLVER = 'https://mavuri-api-test.vercel.app/api/resolve3';
-const RESOLVER_VERSION = '2026.08.31.02';
+const RESOLVER_VERSION = '2026.08.31.03';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -33,20 +33,6 @@ function firstNumber(...values) {
   return null;
 }
 
-function titleFromUrl(productUrl) {
-  try {
-    const url = new URL(productUrl);
-    const match = url.pathname.match(/^\/([^/]+)\/p\/MLB\d+/i);
-    if (!match?.[1]) return '';
-    return decodeURIComponent(match[1])
-      .replace(/-/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  } catch {
-    return '';
-  }
-}
-
 async function readJson(url) {
   try {
     const response = await fetch(url, {
@@ -60,24 +46,6 @@ async function readJson(url) {
   }
 }
 
-function chooseOffer(payload) {
-  const list = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.results)
-      ? payload.results
-      : Array.isArray(payload?.items)
-        ? payload.items
-        : [];
-
-  const candidates = list.filter(Boolean);
-  if (!candidates.length) return null;
-
-  return candidates
-    .filter(item => firstNumber(item.price, item.current_price) !== null)
-    .sort((a, b) => firstNumber(a.price, a.current_price) - firstNumber(b.price, b.current_price))[0]
-    || candidates[0];
-}
-
 async function categoryName(categoryId) {
   const id = String(categoryId || '').trim();
   if (!/^MLB\d+$/i.test(id)) return id;
@@ -85,47 +53,13 @@ async function categoryName(categoryId) {
   return category?.name || id;
 }
 
-async function enrichCatalog(productId, productUrl, current) {
+async function enrichResolvedItem(current) {
   const product = { ...(current || {}) };
-  const id = String(productId || '').trim().toUpperCase();
-
-  if (/^MLB\d+$/.test(id)) {
-    const catalog = await readJson(`https://api.mercadolibre.com/products/${encodeURIComponent(id)}`);
-    if (catalog) {
-      product.title = firstText(catalog.name, catalog.title, product.title);
-      product.category = firstText(catalog.category_id, product.category);
-      product.image = firstText(
-        catalog.pictures?.[0]?.secure_url,
-        catalog.pictures?.[0]?.url,
-        catalog.thumbnail,
-        product.image
-      );
-      product.currency = firstText(catalog.currency_id, product.currency, 'BRL');
-
-      const winner = catalog.buy_box_winner || {};
-      product.itemId = firstText(winner.item_id, winner.id, product.itemId);
-      product.price = firstNumber(winner.price, winner.current_price, product.price);
-      product.previousPrice = firstNumber(winner.original_price, product.previousPrice);
-      product.installments = firstNumber(winner.installments?.quantity, winner.installments_count, product.installments);
-      product.installmentAmount = firstNumber(winner.installments?.amount, product.installmentAmount);
-      product.category = firstText(winner.category_id, catalog.category_id, product.category);
-    }
-
-    const offersPayload = await readJson(`https://api.mercadolibre.com/products/${encodeURIComponent(id)}/items`);
-    const offer = chooseOffer(offersPayload);
-    if (offer) {
-      product.itemId = firstText(offer.item_id, offer.id, product.itemId);
-      product.title = firstText(offer.title, offer.name, product.title);
-      product.category = firstText(offer.category_id, product.category);
-      product.price = firstNumber(offer.price, offer.current_price, product.price);
-      product.previousPrice = firstNumber(offer.original_price, offer.originalPrice, product.previousPrice);
-      product.installments = firstNumber(offer.installments?.quantity, offer.installments_count, offer.installmentQuantity, product.installments);
-      product.installmentAmount = firstNumber(offer.installments?.amount, offer.installmentAmount, product.installmentAmount);
-      product.currency = firstText(offer.currency_id, product.currency, 'BRL');
-    }
-  }
-
   const itemId = String(product.itemId || '').trim().toUpperCase();
+
+  // IMPORTANTE: resolve3 já localiza o anúncio correto. Aqui só enriquecemos
+  // esse mesmo item. Nunca consultamos /products/{catalogId}/items e nunca
+  // escolhemos o menor preço de uma família de anúncios.
   if (/^MLB\d+$/.test(itemId)) {
     const item = await readJson(`https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}`);
     if (item) {
@@ -148,6 +82,7 @@ async function enrichCatalog(productId, productUrl, current) {
       );
     }
 
+    // Se houver preço promocional, usa o preço de venda do MESMO anúncio.
     const salePrice = await readJson(
       `https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}/sale_price?context=channel_marketplace`
     );
@@ -158,15 +93,11 @@ async function enrichCatalog(productId, productUrl, current) {
     }
   }
 
-  product.title = firstText(product.title, titleFromUrl(productUrl));
   product.category = await categoryName(product.category);
-  product.id = id || product.id || '';
-  product.url = productUrl || product.url || '';
-  product.currency = firstText(product.currency, 'BRL');
   product.discount = product.price && product.previousPrice && product.previousPrice > product.price
     ? Math.round(((product.previousPrice - product.price) / product.previousPrice) * 100)
     : null;
-  product.source = 'catalog-product-api+item-sale-price';
+  product.source = itemId ? 'resolve3+item-sale-price' : 'resolve3';
 
   return product;
 }
@@ -182,13 +113,24 @@ export default async function handler(req, res) {
   try {
     const url = new URL(BASE_RESOLVER);
     url.searchParams.set('url', affiliateUrl);
-    const response = await fetch(url.toString(), { headers: { accept: 'application/json' }, cache: 'no-store' });
+
+    const response = await fetch(url.toString(), {
+      headers: { accept: 'application/json' },
+      cache: 'no-store'
+    });
     const payload = await response.json().catch(() => ({}));
+
     if (!response.ok || !payload?.ok) {
-      return res.status(response.status || 502).json({ ...payload, resolverVersion: RESOLVER_VERSION });
+      return res.status(response.status || 502).json({
+        ...payload,
+        resolverVersion: RESOLVER_VERSION
+      });
     }
 
-    const product = await enrichCatalog(payload.productId, payload.productUrl, payload.product || {});
+    // Preserva o resultado escolhido pelo resolve3 e só complementa os dados
+    // do itemId que ele próprio encontrou.
+    const product = await enrichResolvedItem(payload.product || {});
+
     const loaded = [
       product.title && 'nome',
       product.category && 'categoria',
@@ -202,7 +144,8 @@ export default async function handler(req, res) {
       ...payload,
       product,
       resolverVersion: RESOLVER_VERSION,
-      catalogEnrichment: true,
+      catalogEnrichment: false,
+      itemEnrichment: Boolean(/^MLB\d+$/.test(String(product.itemId || '').trim().toUpperCase())),
       message: loaded.length
         ? `Anúncio localizado e dados preenchidos: ${loaded.join(', ')}.`
         : 'Anúncio localizado, mas os dados do produto não foram encontrados.'
