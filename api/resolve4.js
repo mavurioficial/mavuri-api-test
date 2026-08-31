@@ -4,7 +4,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 const BASE_RESOLVER = 'https://mavuri-api-test.vercel.app/api/resolve3';
-const RESOLVER_VERSION = '2026.08.31.01';
+const RESOLVER_VERSION = '2026.08.31.02';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -89,68 +89,62 @@ async function enrichCatalog(productId, productUrl, current) {
   const product = { ...(current || {}) };
   const id = String(productId || '').trim().toUpperCase();
 
-  // O ID /p/MLB... é ID de produto de catálogo, não necessariamente item_id.
-  // Primeiro localizamos o produto vencedor e depois consultamos o anúncio vencedor
-  // para obter dados que podem não existir no recurso de catálogo, como categoria
-  // e preço promocional/regular.
   if (/^MLB\d+$/.test(id)) {
     const catalog = await readJson(`https://api.mercadolibre.com/products/${encodeURIComponent(id)}`);
     if (catalog) {
-      product.title = firstText(product.title, catalog.name, catalog.title);
-      product.category = firstText(product.category, catalog.category_id);
+      product.title = firstText(catalog.name, catalog.title, product.title);
+      product.category = firstText(catalog.category_id, product.category);
       product.image = firstText(
-        product.image,
         catalog.pictures?.[0]?.secure_url,
         catalog.pictures?.[0]?.url,
-        catalog.thumbnail
+        catalog.thumbnail,
+        product.image
       );
-      product.currency = firstText(product.currency, catalog.currency_id, 'BRL');
+      product.currency = firstText(catalog.currency_id, product.currency, 'BRL');
 
       const winner = catalog.buy_box_winner || {};
-      product.itemId = firstText(product.itemId, winner.item_id, winner.id);
-      product.price = firstNumber(product.price, winner.price, winner.current_price);
-      product.previousPrice = firstNumber(product.previousPrice, winner.original_price);
-      product.installments = firstNumber(product.installments, winner.installments?.quantity, winner.installments_count);
-      product.installmentAmount = firstNumber(product.installmentAmount, winner.installments?.amount);
-      product.category = firstText(product.category, winner.category_id);
+      product.itemId = firstText(winner.item_id, winner.id, product.itemId);
+      product.price = firstNumber(winner.price, winner.current_price, product.price);
+      product.previousPrice = firstNumber(winner.original_price, product.previousPrice);
+      product.installments = firstNumber(winner.installments?.quantity, winner.installments_count, product.installments);
+      product.installmentAmount = firstNumber(winner.installments?.amount, product.installmentAmount);
+      product.category = firstText(winner.category_id, catalog.category_id, product.category);
     }
 
     const offersPayload = await readJson(`https://api.mercadolibre.com/products/${encodeURIComponent(id)}/items`);
     const offer = chooseOffer(offersPayload);
     if (offer) {
-      product.itemId = firstText(product.itemId, offer.item_id, offer.id);
-      product.title = firstText(product.title, offer.title, offer.name);
-      product.category = firstText(product.category, offer.category_id);
-      product.price = firstNumber(product.price, offer.price, offer.current_price);
-      product.previousPrice = firstNumber(product.previousPrice, offer.original_price, offer.originalPrice);
-      product.installments = firstNumber(product.installments, offer.installments?.quantity, offer.installments_count, offer.installmentQuantity);
-      product.installmentAmount = firstNumber(product.installmentAmount, offer.installments?.amount, offer.installmentAmount);
-      product.currency = firstText(product.currency, offer.currency_id, 'BRL');
+      product.itemId = firstText(offer.item_id, offer.id, product.itemId);
+      product.title = firstText(offer.title, offer.name, product.title);
+      product.category = firstText(offer.category_id, product.category);
+      product.price = firstNumber(offer.price, offer.current_price, product.price);
+      product.previousPrice = firstNumber(offer.original_price, offer.originalPrice, product.previousPrice);
+      product.installments = firstNumber(offer.installments?.quantity, offer.installments_count, offer.installmentQuantity, product.installments);
+      product.installmentAmount = firstNumber(offer.installments?.amount, offer.installmentAmount, product.installmentAmount);
+      product.currency = firstText(offer.currency_id, product.currency, 'BRL');
     }
   }
 
-  // O item vencedor é a fonte mais confiável para categoria e preço promocional.
-  // O endpoint /sale_price informa amount + regular_amount quando há promoção.
   const itemId = String(product.itemId || '').trim().toUpperCase();
   if (/^MLB\d+$/.test(itemId)) {
     const item = await readJson(`https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}`);
     if (item) {
-      product.title = firstText(product.title, item.title);
-      product.category = firstText(product.category, item.category_id);
-      product.price = firstNumber(product.price, item.price, item.current_price);
-      product.previousPrice = firstNumber(product.previousPrice, item.original_price);
-      product.currency = firstText(product.currency, item.currency_id, 'BRL');
+      product.title = firstText(item.title, product.title);
+      product.category = firstText(item.category_id, product.category);
+      product.price = firstNumber(item.price, item.current_price, product.price);
+      product.previousPrice = firstNumber(item.original_price, product.previousPrice);
+      product.currency = firstText(item.currency_id, product.currency, 'BRL');
       product.installments = firstNumber(
-        product.installments,
         item.installments?.quantity,
         item.installments_count,
-        item.installmentQuantity
+        item.installmentQuantity,
+        product.installments
       );
       product.installmentAmount = firstNumber(
-        product.installmentAmount,
         item.installments?.amount,
         item.installment_amount,
-        item.installmentAmount
+        item.installmentAmount,
+        product.installmentAmount
       );
     }
 
@@ -158,9 +152,9 @@ async function enrichCatalog(productId, productUrl, current) {
       `https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}/sale_price?context=channel_marketplace`
     );
     if (salePrice) {
-      product.price = firstNumber(product.price, salePrice.amount);
-      product.previousPrice = firstNumber(product.previousPrice, salePrice.regular_amount);
-      product.currency = firstText(product.currency, salePrice.currency_id, 'BRL');
+      product.price = firstNumber(salePrice.amount, product.price);
+      product.previousPrice = firstNumber(salePrice.regular_amount, product.previousPrice);
+      product.currency = firstText(salePrice.currency_id, product.currency, 'BRL');
     }
   }
 
