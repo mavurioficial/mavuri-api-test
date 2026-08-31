@@ -1,2 +1,2 @@
-const BASE='https://mavuri-api-test.vercel.app/api/resolve6';
+const BASE='https://mavuri-api-test.vercel.app/api/resolve7';
 export default async function handler(req,res){if(req.method==='OPTIONS')return res.status(204).end();if(req.method!=='GET')return res.status(405).json({message:'Método não permitido.'});try{const u=new URL(BASE);u.searchParams.set('url',String(req.query?.url||''));const r=await fetch(u.toString(),{headers:{accept:'application/json'},cache:'no-store'});const data=await r.json().catch(()=>({}));return res.status(r.status||502).json(data)}catch(e){return res.status(502).json({ok:false,message:'Não foi possível chamar o resolver de produto.',error:String(e?.message||e)})}}
