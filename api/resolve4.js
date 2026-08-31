@@ -4,7 +4,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 const BASE_RESOLVER = 'https://mavuri-api-test.vercel.app/api/resolve3';
-const RESOLVER_VERSION = '2026.08.31.04';
+const RESOLVER_VERSION = '2026.08.31.05';
 
 function cors(req, res) {
   const origin = req.headers.origin || '';
@@ -46,28 +46,36 @@ async function readJson(url) {
   }
 }
 
-async function enrichExactCatalogProduct(product) {
+async function enrichFromCatalogSearch(product) {
   const current = { ...(product || {}) };
   const productId = String(current.id || current.productId || '').trim().toUpperCase();
   if (!/^MLB\d+$/.test(productId)) return current;
 
-  const catalog = await readJson(`https://api.mercadolibre.com/products/${encodeURIComponent(productId)}`);
-  if (!catalog) return current;
+  // Quando o HTML da PDP é bloqueado, não usamos números da página de bloqueio.
+  // Consultamos somente itens associados ao MESMO catalog_product_id.
+  // A busca mantém a ordenação de relevância do Mercado Livre; não usamos
+  // price_asc e nunca escolhemos artificialmente o menor preço.
+  const search = await readJson(
+    `https://api.mercadolibre.com/sites/MLB/search?catalog_product_id=${encodeURIComponent(productId)}&limit=10`
+  );
 
-  const winner = catalog.buy_box_winner || {};
+  const results = Array.isArray(search?.results) ? search.results : [];
+  const exact = results.filter(item => String(item?.catalog_product_id || '').toUpperCase() === productId);
+  const winner = exact[0] || results[0];
+  if (!winner) return current;
 
-  // O ID recebido do link é a página de produto exata. Quando o HTML estiver
-  // bloqueado por account-verification, usamos somente o vencedor dessa mesma
-  // página de catálogo. Nunca procuramos o menor preço de uma família diferente.
-  current.title = firstText(current.title, catalog.name, catalog.family_name);
-  current.category = firstText(current.category, catalog.category_id, catalog.domain_id);
-  current.image = firstText(current.image, catalog.pictures?.[0]?.secure_url, catalog.pictures?.[0]?.url, catalog.thumbnail);
-  current.price = firstNumber(current.price, winner.price, catalog.price);
-  current.previousPrice = firstNumber(current.previousPrice, winner.original_price);
-  current.currency = firstText(current.currency, winner.currency_id, catalog.currency_id, 'BRL');
-  current.itemId = firstText(current.itemId, winner.item_id);
+  current.title = firstText(current.title, winner.title);
+  current.category = firstText(current.category, winner.category_id);
+  current.image = firstText(current.image, winner.thumbnail, winner.pictures?.[0]?.url);
+  current.price = firstNumber(winner.price, current.price);
+  current.previousPrice = firstNumber(winner.original_price, current.previousPrice);
+  current.currency = firstText(winner.currency_id, current.currency, 'BRL');
+  current.installments = firstNumber(winner.installments?.quantity, winner.installments_quantity);
+  current.installmentAmount = firstNumber(winner.installments?.amount, winner.installment_amount);
+  current.itemId = firstText(winner.id, current.itemId);
   current.catalogProductId = productId;
   current.catalogFallback = true;
+  current.catalogFallbackSource = 'catalog_product_search_relevance';
 
   if (current.price !== null && current.previousPrice !== null && current.previousPrice <= current.price) {
     current.previousPrice = null;
@@ -106,11 +114,10 @@ export default async function handler(req, res) {
     }
 
     let product = { ...(payload.product || {}) };
-
-    // REGRA CRÍTICA:
-    // preço extraído de uma página bloqueada/account-verification NÃO é confiável.
-    // Nunca aceitamos o primeiro número encontrado no HTML de uma página de bloqueio.
     const pageBlocked = payload.directPageRead === false || payload.directPageDiagnostics?.blocked === true;
+
+    // Números encontrados na página de account-verification são lixo para nós.
+    // Se a leitura real da página não aconteceu, zera os campos antes do fallback.
     if (pageBlocked) {
       product.price = null;
       product.previousPrice = null;
@@ -118,10 +125,12 @@ export default async function handler(req, res) {
       product.installmentAmount = null;
     }
 
-    product = await enrichExactCatalogProduct({
-      ...product,
-      id: firstText(product.id, payload.productId)
-    });
+    if (pageBlocked || product.price === null || product.price === undefined) {
+      product = await enrichFromCatalogSearch({
+        ...product,
+        id: firstText(product.id, payload.productId)
+      });
+    }
 
     const loaded = [
       product.title && 'nome',
