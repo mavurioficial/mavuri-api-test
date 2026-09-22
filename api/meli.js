@@ -248,6 +248,17 @@ async function searchWithFallback(req, q, limit) {
   return { ok: false, status: direct.response.status, data: { ...direct.data, catalog_fallback: catalog.data } };
 }
 
+async function getItem(req, itemId) {
+  if (!itemId || !/^MLB\\d+$/.test(itemId)) {
+    return { ok: false, status: 400, data: { message: "itemId inválido." } };
+  }
+  const enriched = await enrichMarketplaceItem(req, { id: itemId, item_id: itemId });
+  if (!enriched?.id || !isNumber(enriched.price)) {
+    return { ok: false, status: 404, data: { message: "Item não encontrado ou sem preço disponível.", item_id: itemId } };
+  }
+  return { ok: true, data: enriched };
+}
+
 async function diagnostic(req, q) {
   const term = q || "tv";
   const results = [];
@@ -311,7 +322,7 @@ export default async function handler(req, res) {
       const { response, data } = await meliFetch(req, `${MeliApi}/users/me`, { useAuth: true, publicFallback: false });
       return send(res, response.status, data);
     }
-    if (action === "categories") {
+    if (action === "item") {\n      const itemId = String(req.query?.id || "").trim().toUpperCase();\n      const result = await getItem(req, itemId);\n      return send(res, result.ok ? 200 : result.status, result.data);\n    }\n    if (action === "categories") {
       const { response, data } = await meliFetch(req, `${MeliApi}/sites/MLB/categories`, { useAuth: false, publicFallback: false });
       return send(res, response.status, data);
     }
@@ -324,7 +335,7 @@ export default async function handler(req, res) {
       const result = await searchWithFallback(req, q, limit);
       return send(res, result.ok ? 200 : (result.status || 502), result.data);
     }
-    return send(res, 400, { message: "Ação inválida.", actions: ["me", "search", "categories", "diagnostic"] });
+    return send(res, 400, { message: "Ação inválida.", actions: ["me", "item", "search", "categories", "diagnostic"] });
   } catch (error) {
     console.error("Erro no proxy Mercado Livre:", error);
     return send(res, 500, { message: "Erro interno ao consultar a API do Mercado Livre.", error: error instanceof Error ? error.message : String(error) });
