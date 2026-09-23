@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.09.23.07';
+const RESOLVER_VERSION='2026.09.23.08';
 function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
@@ -38,7 +38,7 @@ async function json(url,extraHeaders={}){try{const r=await get(url,{accept:'appl
 function pageProduct(html,id,url){
   const objs=jsonBlocks(html),p=objs.flatMap(x=>Array.isArray(x)?x:Array.isArray(x?.['@graph'])?x['@graph']:[x]).find(x=>x?.['@type']==='Product'||Array.isArray(x?.['@type'])&&x['@type'].includes('Product'))||{},o=Array.isArray(p.offers)?p.offers[0]:(p.offers||{});
   const slug=String(new URL(url).pathname.split('/').filter(Boolean)[0]||'').replace(/[-_]+/g,' ').trim();
-  const genericPrice=html.match(/R\\$\\s*([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i)?.[1]||html.match(/([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i)?.[1]||null;
+  const genericPrice=html.match(/R\\$\\s*([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i)?.[1]||html.match(/([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/i)?.[1]||null;
   return{id,url,title:first(p.name,meta(html,['og:title','twitter:title']).replace(/\\s*\\|\\s*Mercado Livre.*$/i,''),slug.replace(/\\bUp\\b/i,'')),category:'',image:first(Array.isArray(p.image)?p.image[0]:p.image,meta(html,['og:image','twitter:image'])),price:number(o.price)??number(meta(html,['product:price:amount','og:price:amount']))??number(genericPrice),previousPrice:null,installments:null,installmentAmount:null,currency:first(o.priceCurrency,meta(html,['product:price:currency','og:price:currency']),'BRL'),source:'page-html'}}
 function htmlSearchProduct(html,query,itemId){
   const source=String(html||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/gi,' ').replace(/&quot;/gi,'"').replace(/&#39;/gi,"'").replace(/&amp;/gi,'&').replace(/\s+/g,' ').trim();
