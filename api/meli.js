@@ -30,10 +30,10 @@ function authHeaders(req, useAuth = true, extra = {}) {
 async function meliFetch(req, url, { useAuth = true, publicFallback = true, headers = {} } = {}) {
   let response = await fetch(url, { headers: authHeaders(req, useAuth, headers), cache: "no-store" });
   let data = await lerResposta(response);
-  if (publicFallback && useAuth && req.headers.authorization && !response.ok && (response.status === 401 || response.status === 403)) {
-    response = await fetch(url, { headers: authHeaders(req, false, headers), cache: "no-store" });
-    data = await lerResposta(response);
-  }
+  // O Mercado Livre exige Access Token também para recursos de busca.
+  // Não fazer fallback anônimo: desde as regras atuais da API isso pode gerar
+  // um segundo 403 e esconder a causa real da falha.
+  return { response, data };
   return { response, data };
 }
 
