@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.09.23.10';
+const RESOLVER_VERSION='2026.09.23.11';
 function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
@@ -69,7 +69,7 @@ function searchObjectData(html,query,itemId=''){
     if(price!==null||permalink)candidates.push({title,permalink,price,previousPrice:number(node.original_price,node.originalPrice,node.list_price,node.regular_price,node.item?.original_price,node.offers?.highPrice),installments:number(node.installments?.quantity,node.installments_count,node.installmentQuantity,node.item?.installments?.quantity),installmentAmount:number(node.installments?.amount,node.installment_amount,node.item?.installments?.amount),image:first(node.thumbnail,node.secure_thumbnail,node.image,node.picture,node.item?.thumbnail,node.product?.pictures?.[0]?.url),category:first(node.category_id,node.categoryId,node.item?.category_id),score:score(query,title),_hasId:itemId&&JSON.stringify(node).toUpperCase().includes(String(itemId).toUpperCase())?1:0});
   });
   candidates.sort((a,b)=>b._hasId-a._hasId||b.score-a.score);
-  const structured=candidates[0]&&candidates[0].score>=0.72?candidates[0]:null;
+  const structured=candidates.find(x=>x.score>=0.72&&x.price!==null)||null;
   return structured||htmlSearchProduct(html,query,itemId);
 }
 async function enrich(product,id,query,authorization,catalogProductId=''){
