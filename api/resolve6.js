@@ -14,10 +14,9 @@ function meta(html,names){for(const name of names){const e=name.replace(/[.*+?^$
 function jsonBlocks(html){const out=[];const s=String(html||'');for(const m of s.matchAll(/<script[^>]+type=[\"']application\/(?:ld\+json|json)[\"'][^>]*>([\s\S]*?)<\/script>/gi)){try{out.push(JSON.parse(m[1].trim()))}catch{}}return out}
 function walk(v,fn,seen=new Set()){if(!v||typeof v!=='object'||seen.has(v))return;seen.add(v);fn(v);if(Array.isArray(v))for(const x of v)walk(x,fn,seen);else for(const x of Object.values(v))walk(x,fn,seen)}
 function findProductUrl(html,base){
-  const source=String(html||'').replace(/\\\\\\//g,'/').replace(/\\\\u002F/gi,'/');
+  const source=String(html||'').replace(/\\\//g,'/').replace(/\\u002F/gi,'/');
   const out=[];
   const patterns=[
-    /https?:\\?\\/\\?\\/[^"'<>\\s]+?\\/(?:p|up)\\/MLB\\d+[^"'<>\\s]*/gi,
     /https?:\\/\\/[^"'<>\\s]+?\\/(?:p|up)\\/MLB\\d+[^"'<>\\s]*/gi,
     /(?:href|data-href|data-url|url)=["']([^"']*\\/(?:p|up)\\/MLB\\d+[^"']*)["']/gi
   ];
@@ -25,7 +24,7 @@ function findProductUrl(html,base){
     try{
       const raw=clean(m[1]||m[0]).replace(/\\\\/g,'');
       const u=new URL(raw,base).toString();
-      if(productUrl(u)||/\\/(?:p|up)\\/MLB\\d+/i.test(u)) out.push(u);
+      if(productUrl(u)) out.push(u);
     }catch{}
   }
   if(out.length)return [...new Set(out)][0];
