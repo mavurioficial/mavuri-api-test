@@ -1,10 +1,10 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.09.23.05';
+const RESOLVER_VERSION='2026.09.23.06';
 function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
-function productUrl(v){return ml(v)&&/\/p\/MLB\d+/i.test(String(v||''))}
-function productId(v){return String(v||'').match(/\/p\/(MLB\d+)/i)?.[1]?.toUpperCase()||''}
+function productUrl(v){return ml(v)&&/(?:\/p\/MLB\d+|\/up\/MLB[A-Z0-9_-]*\d+)/i.test(String(v||''))}
+function productId(v){const s=String(v||'');return s.match(/(?:item_id(?:%3A|:|=)|wid(?:%3A|:|=))(MLB\d+)/i)?.[1]?.toUpperCase()||s.match(/\/p\/(MLB\d+)/i)?.[1]?.toUpperCase()||s.match(/(?:^|[^A-Z])((?:MLB)\d{6,})(?:[^0-9]|$)/i)?.[1]?.toUpperCase()||''}
 function unwrap(v){try{const u=new URL(v);if(!/\/gz\/account-verification/i.test(u.pathname))return null;const go=clean(u.searchParams.get('go'));return productUrl(go)?go:null}catch{return null}}
 function first(...a){for(const v of a.flat(Infinity)){const s=String(v??'').trim();if(s)return s}return ''}
 function number(v){if(v===null||v===undefined||v==='')return null;if(typeof v==='number')return Number.isFinite(v)?v:null;const n=Number(String(v).replace(/[^0-9,.-]/g,'').replace(/\.(?=\d{3}(?:\D|$))/g,'').replace(',','.'));return Number.isFinite(n)?n:null}
@@ -16,7 +16,7 @@ function walk(v,fn,seen=new Set()){if(!v||typeof v!=='object'||seen.has(v))retur
 function findProductUrl(html,base){
   const source=String(html||'').replace(/\\\//g,'/').replace(/\\u002F/gi,'/');
   const patterns=[
-    new RegExp("https?://[^\"'<>\\s]+?/(?:p|up)/MLB\\d+[^\"'<>\\s]*","gi"),
+    new RegExp("https?://[^\"'<>\\s]+?/(?:p)/MLB\\d+|up/MLB[A-Z0-9_-]*\\d+[^\"'<>\\s]*","gi"),
     new RegExp("(?:href|data-href|data-url|url)=[\"']([^\"']*/(?:p|up)/MLB\\d+[^\"']*)[\"']","gi")
   ];
   for(const pattern of patterns){
