@@ -16,8 +16,8 @@ function walk(v,fn,seen=new Set()){if(!v||typeof v!=='object'||seen.has(v))retur
 function findProductUrl(html,base){
   const source=String(html||'').replace(/\\\//g,'/').replace(/\\u002F/gi,'/');
   const patterns=[
-    new RegExp("https?:\\\\/\\\\/[^\"'<>\\\\s]+?\\\\/(?:p|up)\\\\/MLB\\\\d+[^\"'<>\\\\s]*","gi"),
-    new RegExp("(?:href|data-href|data-url|url)=[\"']([^\"']*\\\\/(?:p|up)\\\\/MLB\\\\d+[^\"']*)[\"']","gi")
+    new RegExp("https?://[^\"'<>\\s]+?/(?:p|up)/MLB\\d+[^\"'<>\\s]*","gi"),
+    new RegExp("(?:href|data-href|data-url|url)=[\"']([^\"']*/(?:p|up)/MLB\\d+[^\"']*)[\"']","gi")
   ];
   for(const pattern of patterns){
     for(const match of source.matchAll(pattern)){
@@ -28,9 +28,9 @@ function findProductUrl(html,base){
       }catch{}
     }
   }
-  const ids=[...source.matchAll(/\\bMLB\\d{6,}\\b/gi)].map(m=>m[0].toUpperCase());
+  const ids=[...source.matchAll(/\bMLB\d{6,}\b/gi)].map(m=>m[0].toUpperCase());
   const id=[...new Set(ids)][0];
-  return id?`https://www.mercadolivre.com.br/p/${id}`:null;
+  return id ? 'https://www.mercadolivre.com.br/p/'+id : null;
 }
 async function get(url,headers={}){try{const r=await fetch(url,{redirect:'follow',cache:'no-store',headers});return r}catch{return null}}
 async function json(url){try{const r=await get(url,{accept:'application/json'});if(!r||!r.ok)return null;return await r.json()}catch{return null}}
