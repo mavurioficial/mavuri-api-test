@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.09.23.06';
+const RESOLVER_VERSION='2026.09.23.07';
 function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
@@ -34,7 +34,7 @@ function findProductUrl(html,base){
   return id ? 'https://www.mercadolivre.com.br/p/'+id : null;
 }
 async function get(url,headers={}){try{const r=await fetch(url,{redirect:'follow',cache:'no-store',headers});return r}catch{return null}}
-async function json(url){try{const r=await get(url,{accept:'application/json','accept-language':'pt-BR,pt;q=0.9','user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36'});if(!r||!r.ok)return null;return await r.json()}catch{return null}}
+async function json(url,extraHeaders={}){try{const r=await get(url,{accept:'application/json','accept-language':'pt-BR,pt;q=0.9','user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36',...extraHeaders});if(!r||!r.ok)return null;return await r.json()}catch{return null}}
 function pageProduct(html,id,url){
   const objs=jsonBlocks(html),p=objs.flatMap(x=>Array.isArray(x)?x:Array.isArray(x?.['@graph'])?x['@graph']:[x]).find(x=>x?.['@type']==='Product'||Array.isArray(x?.['@type'])&&x['@type'].includes('Product'))||{},o=Array.isArray(p.offers)?p.offers[0]:(p.offers||{});
   const slug=String(new URL(url).pathname.split('/').filter(Boolean)[0]||'').replace(/[-_]+/g,' ').trim();
@@ -105,7 +105,7 @@ async function enrich(product,id,query,authorization,catalogProductId=''){
     if(w?.item_id){product.itemId=String(w.item_id).toUpperCase();product.price=number(w.price)??product.price;product.previousPrice=number(w.original_price)??product.previousPrice;product.currency=first(w.currency_id,product.currency,'BRL')}
   }
   if((!product.itemId || product.price === null || product.price <= 0) && query){
-    const search=await json(`https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=20`);
+    const search=await json(`https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=20`,authorization?{authorization}:{});
     const results=Array.isArray(search?.results)?search.results:[];
     const exactCatalog=results.find(x=>String(x?.catalog_product_id||'').toUpperCase()===String(id||'').toUpperCase());
     const ranked=results.map(x=>({...x,_score:score(query,x?.title||'')})).sort((a,b)=>b._score-a._score);
