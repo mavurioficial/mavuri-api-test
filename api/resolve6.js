@@ -13,7 +13,26 @@ function score(a,b){const x=new Set(norm(a).split(' ').filter(Boolean)),y=new Se
 function meta(html,names){for(const name of names){const e=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');for(const p of [new RegExp(`<meta[^>]+(?:property|name)=[\"']${e}[\"'][^>]+content=[\"']([^\"']*)[\"'][^>]*>`,'i'),new RegExp(`<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:property|name)=[\"']${e}[\"'][^>]*>`,'i')]){const m=String(html||'').match(p);if(m?.[1])return m[1].replace(/&quot;/g,'"').replace(/&amp;/g,'&').trim()}}return ''}
 function jsonBlocks(html){const out=[];const s=String(html||'');for(const m of s.matchAll(/<script[^>]+type=[\"']application\/(?:ld\+json|json)[\"'][^>]*>([\s\S]*?)<\/script>/gi)){try{out.push(JSON.parse(m[1].trim()))}catch{}}return out}
 function walk(v,fn,seen=new Set()){if(!v||typeof v!=='object'||seen.has(v))return;seen.add(v);fn(v);if(Array.isArray(v))for(const x of v)walk(x,fn,seen);else for(const x of Object.values(v))walk(x,fn,seen)}
-function findProductUrl(html,base){const out=[];const ps=[/https?:\\?\/\\?\/[^\"'<>\\\s]+?\/p\/MLB\d+[^\"'<>\\\s]*/gi,/https?:\/\/[^\"'<>\s]+?\/p\/MLB\d+[^\"'<>\s]*/gi,/href=[\"']([^\"']*\/p\/MLB\d+[^\"']*)[\"']/gi];for(const p of ps)for(const m of String(html||'').matchAll(p)){try{const u=new URL(clean(m[1]||m[0]),base).toString();if(productUrl(u))out.push(u)}catch{}}return [...new Set(out)][0]||null}
+function findProductUrl(html,base){
+  const source=String(html||'').replace(/\\\\\\//g,'/').replace(/\\\\u002F/gi,'/');
+  const out=[];
+  const patterns=[
+    /https?:\\?\\/\\?\\/[^"'<>\\s]+?\\/(?:p|up)\\/MLB\\d+[^"'<>\\s]*/gi,
+    /https?:\\/\\/[^"'<>\\s]+?\\/(?:p|up)\\/MLB\\d+[^"'<>\\s]*/gi,
+    /(?:href|data-href|data-url|url)=["']([^"']*\\/(?:p|up)\\/MLB\\d+[^"']*)["']/gi
+  ];
+  for(const p of patterns) for(const m of source.matchAll(p)){
+    try{
+      const raw=clean(m[1]||m[0]).replace(/\\\\/g,'');
+      const u=new URL(raw,base).toString();
+      if(productUrl(u)||/\\/(?:p|up)\\/MLB\\d+/i.test(u)) out.push(u);
+    }catch{}
+  }
+  if(out.length)return [...new Set(out)][0];
+  const ids=[...source.matchAll(/\\bMLB\\d{6,}\\b/gi)].map(m=>m[0].toUpperCase());
+  const id=[...new Set(ids)][0];
+  return id ? `https://www.mercadolivre.com.br/p/${id}` : null;
+}
 async function get(url,headers={}){try{const r=await fetch(url,{redirect:'follow',cache:'no-store',headers});return r}catch{return null}}
 async function json(url){try{const r=await get(url,{accept:'application/json'});if(!r||!r.ok)return null;return await r.json()}catch{return null}}
 function pageProduct(html,id,url){const objs=jsonBlocks(html),p=objs.flatMap(x=>Array.isArray(x)?x:Array.isArray(x?.['@graph'])?x['@graph']:[x]).find(x=>x?.['@type']==='Product'||Array.isArray(x?.['@type'])&&x['@type'].includes('Product'))||{},o=Array.isArray(p.offers)?p.offers[0]:(p.offers||{});return{id,url,title:first(p.name,meta(html,['og:title','twitter:title']).replace(/\s*\|\s*Mercado Livre.*$/i,'')),category:'',image:first(Array.isArray(p.image)?p.image[0]:p.image,meta(html,['og:image','twitter:image'])),price:number(o.price)??number(meta(html,['product:price:amount','og:price:amount'])),previousPrice:null,installments:null,installmentAmount:null,currency:first(o.priceCurrency,meta(html,['product:price:currency','og:price:currency']),'BRL'),source:'page-html'}}
