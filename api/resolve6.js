@@ -83,18 +83,18 @@ function searchObjectData(html,query,itemId=''){
   return structured||htmlSearchProduct(html,query,itemId);
 }
 function embeddedSocialProductData(html,query){
-  const raw=String(html||'').replace(/\\{1,3}"/g,'"').replace(/\\{1,3}u002F/gi,'/');
+  const raw=String(html||'');
   const q=String(query||'').trim().toLowerCase();
   if(!q)return null;
   const lower=raw.toLowerCase();
   const anchor=lower.indexOf(q);
   if(anchor<0)return null;
   const window=raw.slice(anchor,Math.min(raw.length,anchor+6000));
-  const priceMatch=window.match(/"current_price"\s*:\s*\{\s*"value"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+  const priceMatch=window.match(/\\?"current_price\\?"\s*:\s*\\?\{\\?"value\\?"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
   if(!priceMatch)return null;
-  const previousMatch=window.match(/"previous_price"\s*:\s*\{\s*"value"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
-  const currencyMatch=window.match(/"current_price"[\s\S]{0,180}?"currency"\s*:\s*"([A-Z]{3})"/i);
-  const titleMatch=window.match(/"title"\s*:\s*\{\s*"text"\s*:\s*"([^"]+)"/i);
+  const previousMatch=window.match(/\\?"previous_price\\?"\s*:\s*\\?\{\\?"value\\?"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+  const currencyMatch=window.match(/\\?"current_price\\?"[\s\S]{0,180}?\\?"currency\\?"\s*:\s*\\?"([A-Z]{3})/i);
+  const titleMatch=window.match(/\\?"title\\?"\s*:\s*\\?\{\\?"text\\?"\s*:\s*\\?"([^"]+)/i);
   const price=number(priceMatch[1]);
   if(price===null||price<=0)return null;
   return {title:first(titleMatch?.[1],query),permalink:'',price,previousPrice:number(previousMatch?.[1]),image:'',currency:first(currencyMatch?.[1],'BRL'),score:1,_hasId:0,source:'affiliate-social-embedded'};
