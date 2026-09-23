@@ -72,11 +72,25 @@ async function enrich(product,id,query,authorization){
     const w=catalog.buy_box_winner;
     if(w?.item_id){product.itemId=String(w.item_id).toUpperCase();product.price=number(w.price)??product.price;product.previousPrice=number(w.original_price)??product.previousPrice;product.currency=first(w.currency_id,product.currency,'BRL')}
   }
-  if(!product.itemId){
-    const search=await json(`https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(id)}&limit=10`);
+  if((!product.itemId || product.price === null || product.price <= 0) && query){
+    const search=await json(`https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query)}&limit=20`);
     const results=Array.isArray(search?.results)?search.results:[];
-    const exact=results.find(x=>String(x?.catalog_product_id||'').toUpperCase()===String(id).toUpperCase())||results[0];
-    if(exact){product.itemId=first(exact.id,exact.item_id).toUpperCase();product.title=first(product.title,exact.title);product.category=first(product.category,exact.category_id);product.price=number(exact.price)??product.price;product.previousPrice=number(exact.original_price)??product.previousPrice;product.currency=first(exact.currency_id,product.currency,'BRL');product.image=first(product.image,exact.thumbnail,exact.secure_thumbnail);product.installments=number(exact.installments?.quantity)??product.installments;product.installmentAmount=number(exact.installments?.amount)??product.installmentAmount;product.source='mercadolivre-api-search'}
+    const exactCatalog=results.find(x=>String(x?.catalog_product_id||'').toUpperCase()===String(id||'').toUpperCase());
+    const ranked=results.map(x=>({...x,_score:score(query,x?.title||'')})).sort((a,b)=>b._score-a._score);
+    const exactTitle=ranked.find(x=>x._score>=0.72);
+    const candidate=exactCatalog||exactTitle;
+    if(candidate){
+      product.itemId=first(candidate.id,candidate.item_id,product.itemId).toUpperCase();
+      product.title=first(product.title,candidate.title);
+      product.category=first(product.category,candidate.category_id);
+      product.price=number(candidate.price)??product.price;
+      product.previousPrice=number(candidate.original_price)??product.previousPrice;
+      product.currency=first(candidate.currency_id,product.currency,'BRL');
+      product.image=first(product.image,candidate.thumbnail,candidate.secure_thumbnail);
+      product.installments=number(candidate.installments?.quantity)??product.installments;
+      product.installmentAmount=number(candidate.installments?.amount)??product.installmentAmount;
+      product.source='mercadolivre-api-search';
+    }
   }
   if(product.itemId){
     const item=await json(`https://api.mercadolibre.com/items/${encodeURIComponent(product.itemId)}`);
