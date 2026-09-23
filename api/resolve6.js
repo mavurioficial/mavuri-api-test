@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.09.23.11';
+const RESOLVER_VERSION='2026.09.23.12';
 function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
@@ -58,6 +58,15 @@ function htmlSearchProduct(html,query,itemId){
     candidates.push({title:query,permalink:'',price,previousPrice,score:score(query,query),_hasId:normalizedId&&window.toUpperCase().includes(normalizedId)?1:0,_distance:Math.abs(windowStart-p)});
   }
   if(candidates.length)return candidates.sort((a,b)=>b._hasId-a._hasId||a._distance-b._distance)[0];
+  const tokens=q.split(/\s+/).filter(x=>x.length>3).slice(0,3);
+  if(tokens.length){
+    const anchor=lower.indexOf(tokens.join(' '));
+    if(anchor>=0){
+      const window=source.slice(anchor,Math.min(source.length,anchor+8000));
+      const m=window.match(/R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/i);
+      if(m)return {title:query,permalink:'',price:number(m[1]),previousPrice:null,score:score(query,query),_hasId:0,_distance:0};
+    }
+  }
   return null;
 }
 function searchObjectData(html,query,itemId=''){
