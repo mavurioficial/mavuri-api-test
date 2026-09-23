@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.09.23.23';
+const RESOLVER_VERSION='2026.09.23.24';
 function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
@@ -39,7 +39,7 @@ function pageProduct(html,id,url){
   const objs=jsonBlocks(html),p=objs.flatMap(x=>Array.isArray(x)?x:Array.isArray(x?.['@graph'])?x['@graph']:[x]).find(x=>x?.['@type']==='Product'||Array.isArray(x?.['@type'])&&x['@type'].includes('Product'))||{},o=Array.isArray(p.offers)?p.offers[0]:(p.offers||{});
   const slug=String(new URL(url).pathname.split('/').filter(Boolean)[0]||'').replace(/[-_]+/g,' ').trim();
   const genericPrice=html.match(/R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/i)?.[1]||html.match(/([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/i)?.[1]||null;
-  return{id,url,title:first(p.name,meta(html,['og:title','twitter:title']).replace(/\s*\|\s*Mercado Livre.*$/i,''),slug.replace(/\bUp\b/i,'')),category:'',image:first(Array.isArray(p.image)?p.image[0]:p.image,meta(html,['og:image','twitter:image'])),price:number(o.price)??number(meta(html,['product:price:amount','og:price:amount']))??number(genericPrice),previousPrice:null,installments:null,installmentAmount:null,currency:first(o.priceCurrency,meta(html,['product:price:currency','og:price:currency']),'BRL'),source:'page-html'}}
+  return{id,url,title:first(p.name,meta(html,['og:title','twitter:title']).replace(/\s*\|\s*Mercado Livre.*$/i,''),slug.replace(/\bUp\b/i,'')),category:'',image:first(Array.isArray(p.image)?p.image[0]:p.image,meta(html,['og:image','twitter:image'])),price:number(o.price)??number(meta(html,['product:price:amount','og:price:amount']))??number(genericPrice)??extractEmbeddedPrice(html),previousPrice:null,installments:null,installmentAmount:null,currency:first(o.priceCurrency,meta(html,['product:price:currency','og:price:currency']),'BRL'),source:'page-html'}}
 function htmlSearchProduct(html,query,itemId){
   const source=String(html||'').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/gi,' ').replace(/&quot;/gi,'"').replace(/&#39;/gi,"'").replace(/&amp;/gi,'&').replace(/\s+/g,' ').trim();
   const lower=source.toLowerCase();
@@ -142,6 +142,41 @@ function pageTitle(html){
   const m=String(html||'').match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   return String(m?.[1]||'').replace(/&quot;/g,'"').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim();
 }
+function extractEmbeddedPrice(html){
+  const s=String(html||'');
+  const patterns=[
+    /["'](?:price|current_price|currentPrice|sale_price|salePrice|amount)["']\s*[:=]\s*["']?([0-9]{1,8}(?:[.,][0-9]{1,2})?)["']?/gi,
+    /(?:price|current_price|currentPrice|sale_price|salePrice|amount)\\?["']?\s*[:=]\s*([0-9]{1,8}(?:[.,][0-9]{1,2})?)/gi
+  ];
+  for(const re of patterns){
+    for(const m of s.matchAll(re)){
+      const v=number(m[1]);
+      if(v!==null&&v>0&&v<1000000)return v;
+    }
+  }
+  return null;
+}
+async function searchEngineProduct(query){
+  const q=String(query||'').trim();
+  if(!q)return null;
+  const urls=[
+    'https://www.google.com/search?q='+encodeURIComponent('site:mercadolivre.com.br "'+q+'"'),
+    'https://www.bing.com/search?q='+encodeURIComponent('site:mercadolivre.com.br "'+q+'"')
+  ];
+  for(const u of urls){
+    try{
+      const r=await get(u,{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36','accept-language':'pt-BR,pt;q=0.9'});
+      if(!r?.ok)continue;
+      const h=await r.text();
+      const plain=String(h).replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/gi,' ').replace(/&quot;/gi,'"').replace(/&amp;/gi,'&').replace(/&#39;/gi,"'").replace(/\s+/g,' ').trim();
+      const n=norm(q),pn=norm(plain),at=pn.indexOf(n);
+      const window=at>=0?plain.slice(Math.max(0,at-1500),Math.min(plain.length,at+7000)):plain.slice(0,15000);
+      const prices=[...window.matchAll(/R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/gi)].map(m=>number(m[1])).filter(v=>v!==null&&v>0&&v<1000000);
+      if(at>=0&&prices.length)return {title:q,price:prices[0],previousPrice:prices.length>1?prices[1]:null,image:'',permalink:'',source:'search-engine'};
+    }catch{}
+  }
+  return null;
+}
 async function enrich(product,id,query,authorization,catalogProductId=''){
   // Prefer the user's authenticated Mercado Livre connection through Supabase.
   // This reuses the same token/refresh infrastructure already used by the offers function.
@@ -200,6 +235,7 @@ async function enrich(product,id,query,authorization,catalogProductId=''){
   }
   if(query && (product.price === null || product.price <= 0 || !product.title)){const u='https://lista.mercadolivre.com.br/'+encodeURIComponent(query.replace(/\s+/g,'-'));const r=await get(u,{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36','accept-language':'pt-BR,pt;q=0.9'});if(r?.ok){const h=await r.text(),found=searchObjectData(h,query);if(found){product.title=first(product.title,found.title);product.price=number(found.price)??product.price;product.previousPrice=number(found.previousPrice)??product.previousPrice;product.installments=number(found.installments)??product.installments;product.installmentAmount=number(found.installmentAmount)??product.installmentAmount;product.image=first(product.image,found.image);product.category=first(product.category,found.category);product.productSearchUrl=u;product.source='mercadolivre-search-html-exact-title'}}}
     if(product.itemId){const sale=await json(`https://api.mercadolibre.com/items/${encodeURIComponent(product.itemId)}/sale_price?context=channel_marketplace`);if(sale){product.price=number(sale.amount)??product.price;product.previousPrice=number(sale.regular_amount)??product.previousPrice}}
+  if((product.price===null||product.price<=0)&&query){const web=await searchEngineProduct(query);if(web){product.price=web.price;product.previousPrice=web.previousPrice??product.previousPrice;product.source='search-engine';}}
   product.discount=product.price&&product.previousPrice&&product.previousPrice>product.price?Math.round((product.previousPrice-product.price)/product.previousPrice*100):null;return product;
 }
 export default async function handler(req,res){cors(req,res);if(req.method==='OPTIONS')return res.status(204).end();if(req.method!=='GET')return res.status(405).json({message:'Método não permitido.'});const affiliateUrl=clean(req.query?.url);if(!affiliateUrl)return res.status(400).json({message:'Informe o parâmetro url.'});let parsed;try{parsed=new URL(affiliateUrl)}catch{return res.status(400).json({message:'URL inválida.'})}if(!ml(parsed.toString()))return res.status(400).json({message:'Somente links do Mercado Livre e meli.la são aceitos.'});try{const firstResponse=await get(parsed.toString(),{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36','accept-language':'pt-BR,pt;q=0.9'});const socialUrl=firstResponse?.url||parsed.toString();const firstHtml=await firstResponse?.text();const located=findProductUrl(socialUrl,socialUrl)||findProductUrl(firstHtml,socialUrl);if(!located)return res.status(200).json({ok:false,affiliateUrl:parsed.toString(),socialUrl,productUrl:null,productId:null,resolverVersion:RESOLVER_VERSION,message:'Anúncio não localizado.'});const productResponse=await get(located,{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36','accept-language':'pt-BR,pt;q=0.9'});const redirected=productResponse?.url||located,verification=unwrap(redirected),finalUrl=verification|| (productUrl(redirected)?redirected:located),id=productId(finalUrl)||productId(located);let html='';try{html=await productResponse.text()}catch{}const product=pageProduct(html,id,finalUrl);const slugQuery=String(new URL(finalUrl).pathname.split('/').filter(Boolean)[0]||'').replace(/[-_]+/g,' ').trim();const socialTitle=first(meta(firstHtml,['og:title','twitter:title']),pageTitle(firstHtml)).replace(/\s*\|\s*Mercado Livre.*$/i,'').trim();let query=first(meaningfulQuery(product.title),meaningfulQuery(socialTitle),meaningfulQuery(slugQuery),meaningfulQuery(id));const authorization=req.headers.authorization||'';const catalogProductId=catalogId(finalUrl);const external=await botDoAfiliadoProduct(finalUrl||affiliateUrl);if(external){product.title=first(product.title,external.title);product.price=number(external.price)??product.price;product.previousPrice=number(external.previousPrice)??product.previousPrice;product.image=first(product.image,external.image);product.url=first(external.permalink,product.url);product.source='botdoafiliado';}const social= socialProductData(firstHtml,query,id);if(social){product.title=first(product.title,social.title);product.price=number(social.price)??product.price;product.previousPrice=number(social.previousPrice)??product.previousPrice;product.image=first(product.image,social.image);if(social.permalink&&product.url===finalUrl)product.url=social.permalink;product.source='affiliate-social-html';}await enrich(product,id,query,authorization,catalogProductId);product.id=id;product.url=finalUrl;const has=Boolean(product.title||product.price!==null||product.image);return res.status(200).json({ok:true,affiliateUrl:parsed.toString(),socialUrl,productUrl:finalUrl,productId:id,product,resolverVersion:RESOLVER_VERSION,verificationBypassed:Boolean(verification),catalogEnrichment:true,itemId:product.itemId||null,message:has?'Anúncio real localizado e dados preenchidos.':'Anúncio real localizado, mas os dados ainda não foram encontrados.'})}catch(e){return res.status(502).json({ok:false,affiliateUrl:parsed.toString(),resolverVersion:RESOLVER_VERSION,message:'Erro ao resolver anúncio.',error:String(e?.message||e)})}}
