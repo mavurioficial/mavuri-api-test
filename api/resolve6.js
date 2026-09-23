@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.08.31.07';
+const RESOLVER_VERSION='2026.09.23.02';
 function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
