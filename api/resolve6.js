@@ -112,6 +112,7 @@ function socialProductData(html,query,itemId=''){
 }
 async function botDoAfiliadoProduct(url){
   const key=process.env.BOTDOAFILIADO_API_KEY;
+  console.log('[botdoafiliado] configured=',Boolean(key),'url=',Boolean(url));
   if(!key||!url)return null;
   try{
     const r=await fetch('https://botdoafiliado.com/api/v1/product',{
