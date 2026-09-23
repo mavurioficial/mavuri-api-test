@@ -16,8 +16,8 @@ function walk(v,fn,seen=new Set()){if(!v||typeof v!=='object'||seen.has(v))retur
 function findProductUrl(html,base){
   const source=String(html||'').replace(/\\\//g,'/').replace(/\\u002F/gi,'/');
   const patterns=[
-    new RegExp("https?://[^\"'<>\\s]+?/(?:p)/MLB\\d+|up/MLB[A-Z0-9_-]*\\d+[^\"'<>\\s]*","gi"),
-    new RegExp("(?:href|data-href|data-url|url)=[\"']([^\"']*/(?:p|up)/MLB\\d+[^\"']*)[\"']","gi")
+    new RegExp("https?://[^\"'<>\\s]+?/(?:p/MLB\\d+|up/MLB[A-Z0-9_-]*\\d+)[^\"'<>\\s]*","gi"),
+    new RegExp("(?:href|data-href|data-url|url)=[\"']([^\"']*/(?:p/MLB\\d+|up/MLB[A-Z0-9_-]*\\d+)[^\"']*)[\"']","gi")
   ];
   for(const pattern of patterns){
     for(const match of source.matchAll(pattern)){
