@@ -33,7 +33,7 @@ function findProductUrl(html,base){
   return id ? 'https://www.mercadolivre.com.br/p/'+id : null;
 }
 async function get(url,headers={}){try{const r=await fetch(url,{redirect:'follow',cache:'no-store',headers});return r}catch{return null}}
-async function json(url){try{const r=await get(url,{accept:'application/json'});if(!r||!r.ok)return null;return await r.json()}catch{return null}}
+async function json(url){try{const r=await get(url,{accept:'application/json','accept-language':'pt-BR,pt;q=0.9','user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36'});if(!r||!r.ok)return null;return await r.json()}catch{return null}}
 function pageProduct(html,id,url){
   const objs=jsonBlocks(html),p=objs.flatMap(x=>Array.isArray(x)?x:Array.isArray(x?.['@graph'])?x['@graph']:[x]).find(x=>x?.['@type']==='Product'||Array.isArray(x?.['@type'])&&x['@type'].includes('Product'))||{},o=Array.isArray(p.offers)?p.offers[0]:(p.offers||{});
   const slug=String(new URL(url).pathname.split('/').filter(Boolean)[0]||'').replace(/[-_]+/g,' ').trim();
