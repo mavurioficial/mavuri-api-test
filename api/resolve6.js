@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.09.23.15';
+const RESOLVER_VERSION='2026.09.23.16';
 function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
@@ -125,7 +125,7 @@ async function webSearchProduct(query,itemId=''){
       if(!title||score(query,title)<0.72)continue;
       const prices=[...text.matchAll(/R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/gi)].map(m=>number(m[1])).filter(v=>v!==null&&v>0&&v<1000000);
       if(!prices.length)continue;
-      const href=block.match(/href=["'](https?:\\/\\/[^"']*mercadolivre\\.com\\.br[^"']*)["']/i)?.[1]||'';
+            const href=block.match(/href=["'](https?:\/\/[^"']*mercadolivre\.com\.br[^"']*)["']/i)?.[1]||'';
       const itemHit=itemId&&text.toUpperCase().includes(String(itemId).toUpperCase());
       return {title,price:itemHit?prices[0]:prices[0],previousPrice:prices.length>1?prices[1]:null,permalink:href};
     }
