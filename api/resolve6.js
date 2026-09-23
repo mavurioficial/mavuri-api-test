@@ -40,7 +40,38 @@ function pageProduct(html,id,url){
   const slug=String(new URL(url).pathname.split('/').filter(Boolean)[0]||'').replace(/[-_]+/g,' ').trim();
   const genericPrice=html.match(/R\\$\\s*([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i)?.[1]||html.match(/([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i)?.[1]||null;
   return{id,url,title:first(p.name,meta(html,['og:title','twitter:title']).replace(/\\s*\\|\\s*Mercado Livre.*$/i,''),slug.replace(/\\bUp\\b/i,'')),category:'',image:first(Array.isArray(p.image)?p.image[0]:p.image,meta(html,['og:image','twitter:image'])),price:number(o.price)??number(meta(html,['product:price:amount','og:price:amount']))??number(genericPrice),previousPrice:null,installments:null,installmentAmount:null,currency:first(o.priceCurrency,meta(html,['product:price:currency','og:price:currency']),'BRL'),source:'page-html'}}
-function searchObjectData(html,query){const candidates=[];for(const b of jsonBlocks(html))walk(b,node=>{const title=first(node.title,node.name,node.productName,node.itemName);if(!title)return;const permalink=first(node.permalink,node.url,node.link,node.item?.permalink,node.product?.permalink);const price=number(node.price,node.current_price,node.currentPrice,node.sale_price,node.salePrice,node.item?.price,node.product?.price,node.offers?.price,Array.isArray(node.offers)?node.offers[0]?.price:null);if(price!==null||permalink)candidates.push({title,permalink,price,previousPrice:number(node.original_price,node.originalPrice,node.list_price,node.regular_price,node.item?.original_price,node.offers?.highPrice),installments:number(node.installments?.quantity,node.installments_count,node.installmentQuantity,node.item?.installments?.quantity),installmentAmount:number(node.installments?.amount,node.installment_amount,node.item?.installments?.amount),image:first(node.thumbnail,node.secure_thumbnail,node.image,node.picture,node.item?.thumbnail,node.product?.pictures?.[0]?.url),category:first(node.category_id,node.categoryId,node.item?.category_id),score:score(query,title)})});candidates.sort((a,b)=>b.score-a.score);return candidates[0]&&candidates[0].score>=0.72?candidates[0]:null}
+function htmlSearchProduct(html,query,itemId){
+  const source=String(html||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/gi,' ').replace(/&quot;/gi,'"').replace(/&#39;/gi,"'").replace(/&amp;/gi,'&').replace(/\s+/g,' ').trim();
+  const lower=source.toLowerCase();
+  const q=String(query||'').trim().toLowerCase();
+  const normalizedId=String(itemId||'').toUpperCase();
+  const occurrences=[];
+  let pos=lower.indexOf(q);
+  while(pos>=0 && occurrences.length<20){occurrences.push(pos);pos=lower.indexOf(q,pos+1)}
+  const candidates=[];
+  for(const p of occurrences){
+    const windowStart=Math.max(0,p-1200),windowEnd=Math.min(source.length,p+2500),window=source.slice(windowStart,windowEnd);
+    const nearby=[...window.matchAll(/R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/g)].map(m=>number(m[1])).filter(v=>v!==null&&v>0&&v<1000000);
+    if(!nearby.length)continue;
+    const price=nearby[nearby.length-1];
+    const previousPrice=nearby.length>1?nearby[nearby.length-2]:null;
+    candidates.push({title:query,permalink:'',price,previousPrice,score:score(query,query),_hasId:normalizedId&&window.toUpperCase().includes(normalizedId)?1:0,_distance:Math.abs(windowStart-p)});
+  }
+  if(candidates.length)return candidates.sort((a,b)=>b._hasId-a._hasId||a._distance-b._distance)[0];
+  return null;
+}
+function searchObjectData(html,query,itemId=''){
+  const candidates=[];
+  for(const b of jsonBlocks(html))walk(b,node=>{
+    const title=first(node.title,node.name,node.productName,node.itemName);if(!title)return;
+    const permalink=first(node.permalink,node.url,node.link,node.item?.permalink,node.product?.permalink);
+    const price=number(node.price,node.current_price,node.currentPrice,node.sale_price,node.salePrice,node.item?.price,node.product?.price,node.offers?.price,Array.isArray(node.offers)?node.offers[0]?.price:null);
+    if(price!==null||permalink)candidates.push({title,permalink,price,previousPrice:number(node.original_price,node.originalPrice,node.list_price,node.regular_price,node.item?.original_price,node.offers?.highPrice),installments:number(node.installments?.quantity,node.installments_count,node.installmentQuantity,node.item?.installments?.quantity),installmentAmount:number(node.installments?.amount,node.installment_amount,node.item?.installments?.amount),image:first(node.thumbnail,node.secure_thumbnail,node.image,node.picture,node.item?.thumbnail,node.product?.pictures?.[0]?.url),category:first(node.category_id,node.categoryId,node.item?.category_id),score:score(query,title),_hasId:itemId&&JSON.stringify(node).toUpperCase().includes(String(itemId).toUpperCase())?1:0});
+  });
+  candidates.sort((a,b)=>b._hasId-a._hasId||b.score-a.score);
+  const structured=candidates[0]&&candidates[0].score>=0.72?candidates[0]:null;
+  return structured||htmlSearchProduct(html,query,itemId);
+}
 async function enrich(product,id,query,authorization,catalogProductId=''){
   // Prefer the user's authenticated Mercado Livre connection through Supabase.
   // This reuses the same token/refresh infrastructure already used by the offers function.
