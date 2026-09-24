@@ -3,7 +3,6 @@ import { chromium } from 'playwright-core';
 const BB_API='https://api.browserbase.com/v1';
 const PROJECT_ID=process.env.BROWSERBASE_PROJECT_ID||'';
 const API_KEY=process.env.BROWSERBASE_API_KEY||'';
-const CONTEXT_ID=process.env.MAVURI_BROWSERBASE_CONTEXT_ID||'';
 
 const json=(res,body,status=200)=>{
   res.statusCode=status;
@@ -22,6 +21,16 @@ async function bb(path,options={}) {
   return data;
 }
 
+async function findActiveContext(){
+  const listed=await bb('/sessions');
+  const sessions=Array.isArray(listed)?listed:(listed.sessions||listed.data||[]);
+  const candidates=sessions
+    .filter(s=>s?.projectId===PROJECT_ID && s?.contextId && !['COMPLETED','ERROR','TIMED_OUT','REQUEST_RELEASE'].includes(String(s.status||'').toUpperCase()))
+    .sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
+  if(!candidates.length) throw new Error('Nenhuma sessão Browserbase ativa com Context encontrado. Mantenha a sessão de login aberta e tente novamente.');
+  return candidates[0];
+}
+
 function compactCard(card){
   const components=Object.values(card?.components||{});
   const title=components.find(c=>c?.type==='title')?.title?.text||null;
@@ -34,10 +43,12 @@ function compactCard(card){
 export default async function handler(req,res){
   if(req.method==='OPTIONS') return res.statusCode=204, res.end();
   if(req.method!=='GET') return json(res,{error:'Método não permitido.'},405);
-  if(!API_KEY||!PROJECT_ID||!CONTEXT_ID) return json(res,{error:'Browserbase/Context ainda não configurado.',required_env:['BROWSERBASE_API_KEY','BROWSERBASE_PROJECT_ID','MAVURI_BROWSERBASE_CONTEXT_ID']},503);
+  if(!API_KEY||!PROJECT_ID) return json(res,{error:'Browserbase ainda não configurado.',required_env:['BROWSERBASE_API_KEY','BROWSERBASE_PROJECT_ID']},503);
   let browser;
   try{
-    const session=await bb('/sessions',{method:'POST',body:JSON.stringify({projectId:PROJECT_ID,browserSettings:{context:{id:CONTEXT_ID,persist:true}},keepAlive:true})});
+    const sourceSession=await findActiveContext();
+    const contextId=sourceSession.contextId;
+    const session=await bb('/sessions',{method:'POST',body:JSON.stringify({projectId:PROJECT_ID,browserSettings:{context:{id:contextId,persist:true}},timeout:900,keepAlive:true})});
     browser=await chromium.connectOverCDP(session.connectUrl);
     const context=browser.contexts()[0];
     const page=context.pages()[0]||await context.newPage();
@@ -50,7 +61,7 @@ export default async function handler(req,res){
       return {status:response.status,payload,raw:payload?null:text.slice(0,2000)};
     });
     const cards=result.payload?.polycard_client_model?.polycards||[];
-    return json(res,{ok:result.status===200,session_id:session.id,context_id:CONTEXT_ID,page:pageInfo,hub_search_status:result.status,product_count:cards.length,products:cards.map(compactCard).filter(p=>p.title||p.url).slice(0,20),response_keys:result.payload?Object.keys(result.payload):[],note:result.status===401?'Sessão não autenticada ou Context sem login.':result.status===403?'Mercado Livre recusou a chamada interna do Hub.':result.status===200?'POC conseguiu consultar o Hub autenticado.':'Status inesperado no Hub.'});
+    return json(res,{ok:result.status===200,session_id:session.id,source_context_id:contextId,page:pageInfo,hub_search_status:result.status,product_count:cards.length,products:cards.map(compactCard).filter(p=>p.title||p.url).slice(0,20),response_keys:result.payload?Object.keys(result.payload):[],note:result.status===401?'Sessão não autenticada ou Context sem login.':result.status===403?'Mercado Livre recusou a chamada interna do Hub.':result.status===200?'POC conseguiu consultar o Hub autenticado.':'Status inesperado no Hub.'});
   }catch(error){return json(res,{ok:false,error:'Falha na POC de descoberta.',details:error.message},502)}
   finally{try{await browser?.close()}catch{}}
 }
