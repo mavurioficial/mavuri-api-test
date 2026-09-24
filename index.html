@@ -3,30 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mavuri Resolver — laboratório</title>
+<title>Mavuri Resolver — serviço interno</title>
 <style>
 body{font-family:Arial,sans-serif;margin:0;background:#f4f7f5;color:#183027}
-main{max-width:900px;margin:40px auto;padding:24px}
+main{max-width:760px;margin:40px auto;padding:24px}
 .card{background:#fff;border:1px solid #dbe5df;border-radius:12px;padding:24px;box-shadow:0 2px 10px #00000008}
-h1{margin-top:0}.muted{color:#66756e}
-textarea{width:100%;min-height:90px;box-sizing:border-box;padding:12px;border:1px solid #b9c9c0;border-radius:8px;font-size:15px}
-button{margin-top:12px;padding:11px 18px;border:0;border-radius:8px;background:#28633d;color:#fff;font-weight:700;cursor:pointer}
-pre{white-space:pre-wrap;word-break:break-word;background:#17231e;color:#e8f2ec;padding:16px;border-radius:8px;margin-top:18px;max-height:55vh;overflow:auto}
+h1{margin-top:0}.muted{color:#66756e;line-height:1.55}
 .badge{display:inline-block;background:#e8f4df;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:700}
+code{background:#eef3ef;padding:2px 5px;border-radius:4px}
 </style>
 </head>
 <body>
 <main>
 <div class="card">
-<span class="badge">Mavuri API · laboratório</span>
+<span class="badge">Mavuri API · serviço interno</span>
 <h1>Resolver Mercado Livre</h1>
-<p class="muted">Ambiente de teste isolado. O endpoint mantido em produção é <code>/api/resolve6</code>.</p>
-<label for="url"><strong>Link de afiliado</strong></label>
-<textarea id="url" placeholder="https://meli.la/..."></textarea>
-<button id="testar">Testar resolver</button>
-<pre id="resultado">Aguardando teste...</pre>
+<p class="muted">Este projeto hospeda o resolver usado pelo Mavuri Flow. O endpoint <code>/api/resolve6</code> aceita somente chamadas server-to-server autenticadas.</p>
+<p class="muted">O teste manual pelo navegador foi desativado para não expor o segredo de integração. O endpoint <code>/api/version</code> permanece disponível para health/version.</p>
 </div>
 </main>
-<script src="/app.js?v=2026.09.24.01"></script>
 </body>
 </html>
