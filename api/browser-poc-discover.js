@@ -48,7 +48,8 @@ export default async function handler(req,res){
   try{
     const sourceSession=await findActiveContext();
     const contextId=sourceSession.contextId;
-    const session=await bb('/sessions',{method:'POST',body:JSON.stringify({projectId:PROJECT_ID,browserSettings:{context:{id:contextId,persist:true}},timeout:900,keepAlive:true})});
+    const session=await bb(`/sessions/${encodeURIComponent(sourceSession.id)}`);
+    if(!session.connectUrl) throw new Error('Browserbase não retornou connectUrl para a sessão autenticada ativa.');
     browser=await chromium.connectOverCDP(session.connectUrl);
     const context=browser.contexts()[0];
     const page=context.pages()[0]||await context.newPage();
@@ -61,7 +62,7 @@ export default async function handler(req,res){
       return {status:response.status,payload,raw:payload?null:text.slice(0,2000)};
     });
     const cards=result.payload?.polycard_client_model?.polycards||[];
-    return json(res,{ok:result.status===200,session_id:session.id,source_context_id:contextId,page:pageInfo,hub_search_status:result.status,product_count:cards.length,products:cards.map(compactCard).filter(p=>p.title||p.url).slice(0,20),response_keys:result.payload?Object.keys(result.payload):[],note:result.status===401?'Sessão não autenticada ou Context sem login.':result.status===403?'Mercado Livre recusou a chamada interna do Hub.':result.status===200?'POC conseguiu consultar o Hub autenticado.':'Status inesperado no Hub.'});
+    return json(res,{ok:result.status===200,session_id:sourceSession.id,source_context_id:contextId,page:pageInfo,hub_search_status:result.status,product_count:cards.length,products:cards.map(compactCard).filter(p=>p.title||p.url).slice(0,20),response_keys:result.payload?Object.keys(result.payload):[],note:result.status===401?'Sessão não autenticada ou Context sem login.':result.status===403?'Mercado Livre recusou a chamada interna do Hub.':result.status===200?'POC conseguiu consultar o Hub autenticado.':'Status inesperado no Hub.'});
   }catch(error){return json(res,{ok:false,error:'Falha na POC de descoberta.',details:error.message},502)}
   finally{try{await browser?.close()}catch{}}
 }
