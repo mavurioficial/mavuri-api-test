@@ -1,6 +1,42 @@
 const ALLOWED_ORIGINS=new Set(['https://mavurioficial.github.io','https://mavuri-api-test.vercel.app']);
-const RESOLVER_VERSION='2026.09.24.28';
-function cors(req,res){const o=req.headers.origin||'';if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type')}
+const RESOLVER_VERSION='2026.09.24.29';
+const RATE_LIMIT_WINDOW_MS=60_000;
+const RATE_LIMIT_MAX=60;
+const MAX_URL_LENGTH=2048;
+const rateBuckets=new Map();
+function cors(req,res){
+  const o=req.headers.origin||'';
+  if(ALLOWED_ORIGINS.has(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin')}
+  res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers','Content-Type');
+  res.setHeader('Content-Type','application/json; charset=utf-8');
+  res.setHeader('Cache-Control','no-store');
+  res.setHeader('X-Content-Type-Options','nosniff');
+  res.setHeader('X-Robots-Tag','noindex, nofollow, noarchive');
+}
+function clientIp(req){
+  const forwarded=req.headers['x-forwarded-for'];
+  const raw=Array.isArray(forwarded)?forwarded[0]:forwarded;
+  return String(raw||req.socket?.remoteAddress||'unknown').split(',')[0].trim()||'unknown';
+}
+function allowRequest(req){
+  const now=Date.now();
+  const ip=clientIp(req);
+  const current=rateBuckets.get(ip);
+  if(!current||now-current.startedAt>=RATE_LIMIT_WINDOW_MS){
+    rateBuckets.set(ip,{startedAt:now,count:1});
+  }else{
+    if(current.count>=RATE_LIMIT_MAX)return false;
+    current.count+=1;
+  }
+  if(rateBuckets.size>1000){
+    for(const [key,value] of rateBuckets){
+      if(now-value.startedAt>=RATE_LIMIT_WINDOW_MS)rateBuckets.delete(key);
+      if(rateBuckets.size<=500)break;
+    }
+  }
+  return true;
+}
 function clean(v){return String(v||'').replace(/\\u002F/gi,'/').replace(/\\\//g,'/').replace(/&amp;/g,'&').trim()}
 function ml(v){try{const h=new URL(v).hostname.toLowerCase();return h==='mercadolivre.com.br'||h.endsWith('.mercadolivre.com.br')||h==='meli.la'}catch{return false}}
 function productUrl(v){return ml(v)&&/(?:\/p\/MLB\d+|\/up\/MLB[A-Z0-9_-]*\d+)/i.test(String(v||''))}
@@ -232,4 +268,4 @@ async function enrich(product,id,query,authorization,catalogProductId=''){
   if((product.price===null||product.price<=0)&&query){const web=await searchEngineProduct(query);if(web){product.price=web.price;product.previousPrice=web.previousPrice??product.previousPrice;product.source='search-engine';}}
   product.discount=product.price&&product.previousPrice&&product.previousPrice>product.price?Math.round((product.previousPrice-product.price)/product.previousPrice*100):null;return product;
 }
-export default async function handler(req,res){cors(req,res);if(req.method==='OPTIONS')return res.status(204).end();if(req.method!=='GET')return res.status(405).json({message:'Método não permitido.'});const affiliateUrl=clean(req.query?.url);if(!affiliateUrl)return res.status(400).json({message:'Informe o parâmetro url.'});let parsed;try{parsed=new URL(affiliateUrl)}catch{return res.status(400).json({message:'URL inválida.'})}if(!ml(parsed.toString()))return res.status(400).json({message:'Somente links do Mercado Livre e meli.la são aceitos.'});try{const firstResponse=await get(parsed.toString(),{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36','accept-language':'pt-BR,pt;q=0.9'});const socialUrl=firstResponse?.url||parsed.toString();const firstHtml=await firstResponse?.text();const located=findProductUrl(socialUrl,socialUrl)||findProductUrl(firstHtml,socialUrl);if(!located)return res.status(200).json({ok:false,affiliateUrl:parsed.toString(),socialUrl,productUrl:null,productId:null,resolverVersion:RESOLVER_VERSION,message:'Anúncio não localizado.'});const productResponse=await get(located,{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36','accept-language':'pt-BR,pt;q=0.9'});const redirected=productResponse?.url||located,verification=unwrap(redirected),finalUrl=verification||(productUrl(redirected)?redirected:located),id=productId(finalUrl)||productId(located);let html='';try{html=await productResponse.text()}catch{}const product=pageProduct(html,id,finalUrl);const slugQuery=String(new URL(finalUrl).pathname.split('/').filter(Boolean)[0]||'').replace(/[-_]+/g,' ').trim();const socialTitle=first(meta(firstHtml,['og:title','twitter:title']),pageTitle(firstHtml)).replace(/\s*\|\s*Mercado Livre.*$/i,'').trim();product.title=first(socialTitle,product.title,slugQuery);product.image=first(product.image,meta(firstHtml,['og:image','twitter:image']));let query=first(meaningfulQuery(product.title),meaningfulQuery(socialTitle),meaningfulQuery(slugQuery),meaningfulQuery(id));const authorization=req.headers.authorization||'';const catalogProductId=catalogId(finalUrl);const social=socialProductData(firstHtml,query,id);if(social){product.title=first(product.title,social.title);product.price=number(social.price)??product.price;product.previousPrice=number(social.previousPrice)??product.previousPrice;product.image=first(product.image,social.image);product.currency=first(social.currency,product.currency,'BRL');if(social.permalink&&product.url===finalUrl)product.url=social.permalink;product.source=social.source||'affiliate-social-html';}await enrich(product,id,query,authorization,catalogProductId);product.id=id;product.url=finalUrl;const has=Boolean(product.title||product.price!==null||product.image);return res.status(200).json({ok:true,affiliateUrl:parsed.toString(),socialUrl,productUrl:finalUrl,productId:id,product,resolverVersion:RESOLVER_VERSION,verificationBypassed:Boolean(verification),catalogEnrichment:true,itemId:product.itemId||null,message:has?'Anúncio real localizado e dados preenchidos.':'Anúncio real localizado, mas os dados ainda não foram encontrados.'})}catch(e){return res.status(502).json({ok:false,affiliateUrl:parsed.toString(),resolverVersion:RESOLVER_VERSION,message:'Erro ao resolver anúncio.',error:String(e?.message||e)})}}
+export default async function handler(req,res){cors(req,res);if(req.method==='OPTIONS')return res.status(204).end();if(req.method!=='GET')return res.status(405).json({message:'Método não permitido.'});if(!allowRequest(req)){res.setHeader('Retry-After','60');return res.status(429).json({message:'Limite temporário de consultas atingido. Tente novamente em instantes.'})}const affiliateUrl=clean(req.query?.url);if(!affiliateUrl)return res.status(400).json({message:'Informe o parâmetro url.'});if(affiliateUrl.length>MAX_URL_LENGTH)return res.status(413).json({message:'URL muito longa.'});let parsed;try{parsed=new URL(affiliateUrl)}catch{return res.status(400).json({message:'URL inválida.'})}if(parsed.protocol!=='https:'||parsed.username||parsed.password)return res.status(400).json({message:'Somente URLs HTTPS válidas são aceitas.'});if(!ml(parsed.toString()))return res.status(400).json({message:'Somente links do Mercado Livre e meli.la são aceitos.'});try{const firstResponse=await get(parsed.toString(),{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36','accept-language':'pt-BR,pt;q=0.9'});const socialUrl=firstResponse?.url||parsed.toString();const firstHtml=await firstResponse?.text();const located=findProductUrl(socialUrl,socialUrl)||findProductUrl(firstHtml,socialUrl);if(!located)return res.status(200).json({ok:false,affiliateUrl:parsed.toString(),socialUrl,productUrl:null,productId:null,resolverVersion:RESOLVER_VERSION,message:'Anúncio não localizado.'});const productResponse=await get(located,{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36','accept-language':'pt-BR,pt;q=0.9'});const redirected=productResponse?.url||located,verification=unwrap(redirected),finalUrl=verification||(productUrl(redirected)?redirected:located),id=productId(finalUrl)||productId(located);let html='';try{html=await productResponse.text()}catch{}const product=pageProduct(html,id,finalUrl);const slugQuery=String(new URL(finalUrl).pathname.split('/').filter(Boolean)[0]||'').replace(/[-_]+/g,' ').trim();const socialTitle=first(meta(firstHtml,['og:title','twitter:title']),pageTitle(firstHtml)).replace(/\s*\|\s*Mercado Livre.*$/i,'').trim();product.title=first(socialTitle,product.title,slugQuery);product.image=first(product.image,meta(firstHtml,['og:image','twitter:image']));let query=first(meaningfulQuery(product.title),meaningfulQuery(socialTitle),meaningfulQuery(slugQuery),meaningfulQuery(id));const authorization=req.headers.authorization||'';const catalogProductId=catalogId(finalUrl);const social=socialProductData(firstHtml,query,id);if(social){product.title=first(product.title,social.title);product.price=number(social.price)??product.price;product.previousPrice=number(social.previousPrice)??product.previousPrice;product.image=first(product.image,social.image);product.currency=first(social.currency,product.currency,'BRL');if(social.permalink&&product.url===finalUrl)product.url=social.permalink;product.source=social.source||'affiliate-social-html';}await enrich(product,id,query,authorization,catalogProductId);product.id=id;product.url=finalUrl;const has=Boolean(product.title||product.price!==null||product.image);return res.status(200).json({ok:true,affiliateUrl:parsed.toString(),socialUrl,productUrl:finalUrl,productId:id,product,resolverVersion:RESOLVER_VERSION,verificationBypassed:Boolean(verification),catalogEnrichment:true,itemId:product.itemId||null,message:has?'Anúncio real localizado e dados preenchidos.':'Anúncio real localizado, mas os dados ainda não foram encontrados.'})}catch(e){return res.status(502).json({ok:false,affiliateUrl:parsed.toString(),resolverVersion:RESOLVER_VERSION,message:'Erro ao resolver anúncio.',error:String(e?.message||e)})}}
