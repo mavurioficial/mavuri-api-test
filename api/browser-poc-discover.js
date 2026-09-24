@@ -46,10 +46,11 @@ export default async function handler(req,res){
   if(!API_KEY||!PROJECT_ID) return json(res,{error:'Browserbase ainda não configurado.',required_env:['BROWSERBASE_API_KEY','BROWSERBASE_PROJECT_ID']},503);
   let browser;
   try{
-    const sourceSession=await findActiveContext();
-    const contextId=sourceSession.contextId;
+    const requestedSessionId=String(req.query?.session_id||'').trim();
+    const sourceSession=requestedSessionId ? {id:requestedSessionId,contextId:null} : await findActiveContext();
     const session=await bb(`/sessions/${encodeURIComponent(sourceSession.id)}`);
-    if(!session.connectUrl) throw new Error('Browserbase não retornou connectUrl para a sessão autenticada ativa.');
+    const contextId=sourceSession.contextId || session.contextId || null;
+    if(!session.connectUrl) throw new Error('Browserbase não retornou connectUrl para a sessão autenticada.');
     browser=await chromium.connectOverCDP(session.connectUrl);
     const context=browser.contexts()[0];
     const page=context.pages()[0]||await context.newPage();
