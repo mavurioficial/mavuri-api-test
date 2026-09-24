@@ -31,7 +31,7 @@ export default async function handler(req, res) {
       const context = await bb('/contexts',{method:'POST',body:JSON.stringify({projectId:PROJECT_ID})});
       contextId = context.id; contextCreated = true;
     }
-    const session = await bb('/sessions',{method:'POST',body:JSON.stringify({projectId:PROJECT_ID,browserSettings:{context:{id:contextId,persist:true}},keepAlive:true})});
+    const session = await bb('/sessions',{method:'POST',body:JSON.stringify({projectId:PROJECT_ID,browserSettings:{context:{id:contextId,persist:true}},timeout:900,keepAlive:true})});
     const debug = await bb(`/sessions/${encodeURIComponent(session.id)}/debug`);
     return json(res,{ok:true,purpose:'Mavuri Browser Worker POC — login manual',session_id:session.id,context_id:contextId,context_created:contextCreated,live_view_url:debug.debuggerFullscreenUrl || debug.debuggerUrl || null,expires_at:session.expiresAt || null,next_step:'Abra live_view_url, faça login no Mercado Livre e deixe a sessão aberta até o próximo passo.'});
   } catch(error) { return json(res,{error:'Falha ao iniciar Browserbase.',details:error.message},502); }
