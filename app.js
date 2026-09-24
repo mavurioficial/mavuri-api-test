@@ -1,25 +1,14 @@
-const API_BASE = "https://mavuri-api-test.vercel.app/api/meli";
-const DIAGNOSTIC_API_BASE = "https://mavuri-api-test.vercel.app/api/diagnostic";
-const AFFILIATE_HUB_API = "https://mavuri-api-test.vercel.app/api/affiliates";
-const VERSION_API = "https://mavuri-api-test.vercel.app/api/version";
-const APP_VERSION = "2026.08.28.05";
-const HUB_URL = "https://lista.mercadolivre.com.br/_Container_aff-hub-v2-mixed-topics-mlb";
-let accessToken = "";
-const resultado = document.getElementById("resultado");
-const versao = document.getElementById("versao");
-function mostrar(titulo, dados) { resultado.textContent = titulo + "\n\n" + JSON.stringify(dados, null, 2); }
-function mostrarErro(titulo, erro) { console.error(titulo, erro); mostrar(titulo, { nome: erro?.name || "Erro desconhecido", mensagem: erro?.message || String(erro), status: erro?.status || null, dados: erro?.data || null }); }
-function obterToken() { if (!accessToken) accessToken = document.getElementById("token").value.trim(); return accessToken; }
-function headersComToken() { const token = obterToken(); return token ? { Authorization: "Bearer " + token } : {}; }
-async function lerResposta(response) { const texto = await response.text(); try { return JSON.parse(texto); } catch { return { resposta_texto: texto }; } }
-async function chamarUrl(url, options = {}) { const response = await fetch(url, { cache: "no-store", ...options }); const data = await lerResposta(response); if (!response.ok) { const erro = new Error(data?.message || "A API retornou HTTP " + response.status); erro.name = "Erro da API"; erro.status = response.status; erro.data = data; throw erro; } return data; }
-async function chamarApi(path, options = {}) { return chamarUrl(API_BASE + path, options); }
-async function carregarVersaoApi() { try { const data = await chamarUrl(VERSION_API); versao.textContent = `APP ${APP_VERSION} · API ${data.version || "?"}`; } catch { versao.textContent = `APP ${APP_VERSION} · API indisponível`; } }
-document.getElementById("salvarToken").addEventListener("click", () => { accessToken = document.getElementById("token").value.trim(); if (!accessToken) { resultado.textContent = "ERRO: informe o Access Token."; return; } resultado.textContent = "TOKEN CARREGADO NESTA SESSÃO.\n\nPróximo passo: clique em TESTAR /users/me para validar o token antes de buscar produtos."; });
-document.getElementById("testarUsuario").addEventListener("click", async () => { const token = obterToken(); if (!token) { resultado.textContent = "ERRO: informe primeiro o Access Token."; return; } resultado.textContent = "Validando o Access Token pelo backend..."; try { mostrar("AUTENTICAÇÃO FUNCIONANDO!", await chamarApi("?action=me", { headers: headersComToken() })); } catch (erro) { mostrarErro("TOKEN NÃO VALIDADO", erro); } });
-document.getElementById("buscarProdutos").addEventListener("click", async () => { const busca = document.getElementById("busca").value.trim(); if (!busca) { resultado.textContent = "Digite algo para pesquisar."; return; } if (!obterToken()) { resultado.textContent = "INFORME E VALIDE O ACCESS TOKEN PRIMEIRO."; return; } resultado.textContent = "Buscando com token autenticado..."; try { const data = await chamarApi("?action=search&q=" + encodeURIComponent(busca) + "&limit=20", { headers: headersComToken() }); mostrar("RESULTADO DA BUSCA AUTENTICADA — APP " + APP_VERSION, data); } catch (erro) { mostrarErro("ERRO AO BUSCAR PRODUTOS", erro); } });
-document.getElementById("diagnosticarBusca").addEventListener("click", async () => { const busca = document.getElementById("busca").value.trim() || "tv"; resultado.textContent = "Executando diagnóstico..."; try { mostrar("DIAGNÓSTICO COMPLETO — APP " + APP_VERSION, await chamarUrl(DIAGNOSTIC_API_BASE + "?q=" + encodeURIComponent(busca), { headers: headersComToken() })); } catch (erro) { mostrarErro("ERRO NO DIAGNÓSTICO", erro); } });
-document.getElementById("testarHubAfiliados").addEventListener("click", async () => { resultado.textContent = "Testando o Hub pelo backend da Vercel..."; try { mostrar("TESTE DO HUB PELO BACKEND — APP " + APP_VERSION, await chamarUrl(AFFILIATE_HUB_API)); } catch (erro) { mostrarErro("ERRO NO TESTE DO HUB", erro); } });
-document.getElementById("testarHubNavegador").addEventListener("click", async () => { resultado.textContent = "Testando a MESMA URL diretamente deste navegador, sem enviar seu Access Token..."; try { const response = await fetch(HUB_URL, { method: "GET", mode: "cors", credentials: "omit", cache: "no-store", headers: { Accept: "application/json,text/plain,*/*" } }); const contentType = response.headers.get("content-type"); const text = await response.text(); let json = null; let parseError = null; try { json = JSON.parse(text); } catch (e) { parseError = e.message; } const cards = json?.polycard_client_model?.polycards; mostrar("TESTE DO HUB DIRETAMENTE NO NAVEGADOR — APP " + APP_VERSION, { url: HUB_URL, status: response.status, ok: response.ok, content_type: contentType, response_length: text.length, json_parsed: Boolean(json), parse_error: parseError, card_count: Array.isArray(cards) ? cards.length : null, first_card: Array.isArray(cards) ? cards[0] : null, response_preview: json ? null : text.slice(0, 1200), conclusion: "Este teste não usa o Access Token e serve apenas para comparar a resposta do navegador com a resposta bloqueada recebida pela Vercel." }); } catch (erro) { mostrar("TESTE DIRETO NO NAVEGADOR NÃO CONSEGUIU LER A RESPOSTA — APP " + APP_VERSION, { url: HUB_URL, nome: erro?.name || null, mensagem: erro?.message || String(erro), explicacao: "Se aparecer Failed to fetch, provavelmente o navegador bloqueou a leitura por CORS/rede. Isso ainda é um resultado útil para a investigação." }); } });
-document.getElementById("testarCategorias").addEventListener("click", async () => { resultado.textContent = "Consultando categorias..."; try { mostrar("CATEGORIAS DO MERCADO LIVRE", await chamarApi("?action=categories", { headers: headersComToken() })); } catch (erro) { mostrarErro("ERRO AO CONSULTAR CATEGORIAS", erro); } });
-carregarVersaoApi();
+const result=document.getElementById("resultado");
+document.getElementById("testar").addEventListener("click",async()=>{
+  const value=document.getElementById("url").value.trim();
+  if(!value){result.textContent="Informe um link.";return}
+  result.textContent="Resolvendo...";
+  try{
+    const response=await fetch("/api/resolve6?url="+encodeURIComponent(value),{cache:"no-store"});
+    const text=await response.text();
+    let data;try{data=JSON.parse(text)}catch{data={raw:text}}
+    result.textContent=JSON.stringify({http_status:response.status,...data},null,2);
+  }catch(error){
+    result.textContent=JSON.stringify({erro:error?.message||String(error)},null,2);
+  }
+});
