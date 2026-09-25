@@ -11,6 +11,7 @@
   },
   "scripts": {
     "browser:worker": "node scripts/browser-worker-local.mjs",
-    "browser:discover": "node scripts/browser-discovery-v1.mjs"
+    "browser:discover": "node scripts/browser-discovery-v1.mjs",
+    "browser:runner": "node scripts/browser-discovery-runner-local.mjs"
   }
 }
