@@ -66,13 +66,24 @@ Por padrão:
 
 `%LOCALAPPDATA%\\MavuriChromeProfile`
 
-## Próxima integração
+## Integração com o Mavuri Flow
 
-O JSON produzido é o contrato local inicial para a futura ponte:
+A ponte de ingestão já foi preparada:
 
-**Chrome Worker → ingestão autenticada → flow_offers → regras → delivery jobs → flow-worker → Telegram**
+**Chrome Worker → página autenticada do Mavuri → flow-discovery-ingest → flow_offers → regras → delivery jobs → flow-worker → Telegram**
 
-A Discovery V1 ainda não grava diretamente no Supabase e não publica nada. Isso evita misturar a sessão web local com credenciais server-side antes de fecharmos o contrato de ingestão.
+Quando `MAVURI_AUTO_INGEST=true`, o worker abre a aplicação do Mavuri no mesmo perfil dedicado e usa um bridge de `postMessage`. A própria aplicação autenticada chama a Edge Function com a sessão atual. O worker não lê nem transporta JWT, cookie ou senha.
+
+Configuração:
+
+```powershell
+$env:MAVURI_AUTO_INGEST="true"
+npm run browser:discover
+```
+
+Isso exige que o perfil dedicado do Chrome esteja autenticado no Mavuri. É uma configuração única; depois o fluxo pode ser automatizado.
+
+O padrão continua desligado para permitir validar primeiro a coleta em modo seguro.
 
 ## Segurança e estabilidade
 
