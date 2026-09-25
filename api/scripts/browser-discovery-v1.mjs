@@ -130,7 +130,22 @@ async function ingestToMavuri(page, offers) {
   if (!offers.length) return { ok: true, status: 200, data: { received: 0 } }
 
   await page.goto(MAVURI_APP_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {})
-  await sleep(1500)
+
+  let appAuth = false
+  for (let i = 0; i < 90; i++) {
+    const body = (await page.locator("body").innerText().catch(() => "")).toLowerCase()
+    const url = page.url()
+    appAuth = !url.includes("/login") &&
+      !body.includes("entre na plataforma") &&
+      (body.includes("painel mavuri") || body.includes("mavuri flow") || body.includes("dashboard"))
+    if (appAuth) break
+    console.log("[Mavuri] Aguardando login no Mavuri...")
+    await sleep(2000)
+  }
+
+  if (!appAuth) {
+    throw new Error("Sessão autenticada do Mavuri não foi detectada.")
+  }
 
   return page.evaluate(async (offers) => {
     const requestId = `discovery-${Date.now()}-${Math.random().toString(36).slice(2)}`
