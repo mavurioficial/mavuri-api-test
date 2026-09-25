@@ -94,6 +94,12 @@ function absUrl(value) {
   return value.startsWith("http://") || value.startsWith("https://") ? value : `https://${value}`
 }
 
+function numericValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  const match = String(value ?? "").replace(",", ".").match(/-?\\d+(?:\\.\\d+)?/)
+  return match ? Number(match[0]) : null
+}
+
 function normalize(card) {
   const m = card?.metadata || {}
   const title = component(card, "title")
@@ -106,7 +112,7 @@ function normalize(card) {
     title: title?.text || null,
     price: price?.current_price?.value ?? null,
     previous_price: price?.previous_price?.value ?? null,
-    discount: price?.discount_label?.text || null,
+    discount: numericValue(price?.discount ?? price?.discount_label?.text),
     coupon: price?.coupon_label?.text || null,
     url: absUrl(m.url),
     image_url: picture?.url || picture?.src || null,
