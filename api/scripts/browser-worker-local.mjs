@@ -79,7 +79,7 @@ async function startChromeIfNeeded() {
 }
 
 async function discover(page) {
-  const result = await page.evaluate(async ({ searchUrl }) => {
+  return page.evaluate(async ({ searchUrl }) => {
     const response = await fetch(searchUrl, {
       method: "POST",
       headers: {
@@ -108,8 +108,35 @@ async function discover(page) {
       text: data ? null : text.slice(0, 1000),
     }
   }, { searchUrl: SEARCH_URL })
+}
 
-  return result
+function componentByType(card, type) {
+  return card?.components?.find(component => component?.type === type)?.[type] || null
+}
+
+function absoluteMercadoLivreUrl(value) {
+  if (!value) return null
+  if (value.startsWith("http://") || value.startsWith("https://")) return value
+  return `https://${value}`
+}
+
+function normalizeCard(card, index) {
+  const metadata = card?.metadata || {}
+  const titleComponent = componentByType(card, "title")
+  const priceComponent = componentByType(card, "price")
+
+  return {
+    index: index + 1,
+    id: metadata.id || null,
+    product_id: metadata.product_id || null,
+    type: metadata.type || null,
+    title: titleComponent?.text || null,
+    price: priceComponent?.current_price?.value ?? null,
+    previous_price: priceComponent?.previous_price?.value ?? null,
+    discount: priceComponent?.discount_label?.text || null,
+    url: absoluteMercadoLivreUrl(metadata.url),
+    extra_commission: metadata.extra_commission === "true",
+  }
 }
 
 async function main() {
@@ -119,7 +146,7 @@ async function main() {
   const context = browser.contexts()[0]
   if (!context) throw new Error("Nenhum contexto Chrome encontrado.")
 
-  let pages = context.pages()
+  const pages = context.pages()
   let page = pages.find(p => p.url().includes("mercadolivre.com.br")) || pages[0]
   if (!page) page = await context.newPage()
 
@@ -184,22 +211,7 @@ async function main() {
   const cards = result.data?.polycard_client_model?.polycards || []
   console.log(`[Mavuri] Produtos retornados: ${cards.length}`)
 
-  const products = cards.map((card, index) => {
-    const m = card?.polycard?.metadata || {}
-    const title = card?.polycard?.title?.text || ""
-    const url = m?.url || card?.polycard?.url || null
-    const price = card?.polycard?.price?.current_price?.value ?? null
-    const previousPrice = card?.polycard?.price?.previous_price?.value ?? null
-
-    return {
-      index: index + 1,
-      id: m?.id || null,
-      title,
-      price,
-      previous_price: previousPrice,
-      url,
-    }
-  })
+  const products = cards.map(normalizeCard)
 
   console.log(JSON.stringify(products.slice(0, 10), null, 2))
   console.log("")
