@@ -194,7 +194,7 @@ async function generateLink(page, product) {
     let data = null
     try { data = JSON.parse(text) } catch {}
     return { ok: r.ok, status: r.status, data, text: data ? null : text.slice(0, 1000) }
-  }, { url, itemId: product.id, productUrl: product.url, tag: AFFILIATE_TAG })
+  }, { url: LINK_URL, itemId: product.id, productUrl: product.url, tag: AFFILIATE_TAG })
 }
 
 async function main() {
