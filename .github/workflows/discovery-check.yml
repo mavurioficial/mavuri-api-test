@@ -1,0 +1,22 @@
+name: Local Discovery Check
+
+on:
+  push:
+    branches:
+      - feat/local-affiliate-discovery-v1-2026-09-25
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install
+      - run: node --check scripts/browser-worker-local.mjs
+      - run: node --check scripts/browser-discovery-v1.mjs
