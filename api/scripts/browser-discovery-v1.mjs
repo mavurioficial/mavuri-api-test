@@ -225,23 +225,36 @@ function findAffiliateUrl(value) {
 async function generateLink(page, product) {
   if (!product.id || !product.url) return { ok: false, status: 0, reason: "missing_id_or_url" }
   return page.evaluate(async ({ url, itemId, productUrl, tag }) => {
+    const csrf = (document.cookie.match(/(?:^|;\\s*)_csrf=([^;]+)/i) || [])[1] || ""
     const body = {
+      urls: [productUrl],
+      ...(tag ? { tag } : {}),
       itemId,
       type: "product",
       extraCommission: "false",
-      ...(tag ? { tag } : {}),
-      urls: [productUrl],
     }
     const r = await fetch(url, {
       method: "POST",
-      headers: { "Accept": "application/json, text/plain, */*", "Content-Type": "application/json" },
+      headers: {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        ...(csrf ? { "x-csrf-token": decodeURIComponent(csrf) } : {}),
+      },
       credentials: "include",
+      referrer: "https://www.mercadolivre.com.br/afiliados/linkbuilder",
+      referrerPolicy: "strict-origin-when-cross-origin",
       body: JSON.stringify(body),
     })
     const text = await r.text()
     let data = null
     try { data = JSON.parse(text) } catch {}
-    return { ok: r.ok, status: r.status, data, text: data ? null : text.slice(0, 2000) }
+    return {
+      ok: r.ok,
+      status: r.status,
+      csrf_present: Boolean(csrf),
+      data,
+      text: data ? null : text.slice(0, 2000),
+    }
   }, { url: LINK_URL, itemId: product.id, productUrl: product.url, tag: AFFILIATE_TAG })
 }
 
@@ -323,8 +336,9 @@ async function main() {
         p.affiliate_url = affiliateUrl
         state.products[key(p)].affiliate_url = affiliateUrl
         linksCreated++
-      } else if (result.status) {
-        console.log(`[Mavuri] Link não obtido para ${p.id}: HTTP ${result.status} ${JSON.stringify(result.data || result.text || "").slice(0, 500)}`)
+        console.log(`[Mavuri] Link criado para ${p.id}: ${affiliateUrl}`)
+      } else {
+        console.log(`[Mavuri] Link não obtido para ${p.id}: HTTP ${result.status || 0}; csrf=${result.csrf_present ? "sim" : "não"}; resposta=${JSON.stringify(result.data || result.text || result.reason || "").slice(0, 800)}`)
       }
     }
   } else {
