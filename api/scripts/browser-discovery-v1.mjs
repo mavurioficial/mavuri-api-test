@@ -189,6 +189,29 @@ async function save(path, data) {
   await writeFile(path, JSON.stringify(data, null, 2), "utf8")
 }
 
+function findAffiliateUrl(value) {
+  if (!value) return null
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (/^https?:\/\//i.test(trimmed) && /(meli\.la|mercadolivre\.com\.br)/i.test(trimmed)) return trimmed
+    return null
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findAffiliateUrl(item)
+      if (found) return found
+    }
+    return null
+  }
+  if (typeof value === "object") {
+    for (const item of Object.values(value)) {
+      const found = findAffiliateUrl(item)
+      if (found) return found
+    }
+  }
+  return null
+}
+
 async function generateLink(page, product) {
   if (!product.id || !product.url) return { ok: false, status: 0, reason: "missing_id_or_url" }
   return page.evaluate(async ({ url, itemId, productUrl, tag }) => {
@@ -208,7 +231,7 @@ async function generateLink(page, product) {
     const text = await r.text()
     let data = null
     try { data = JSON.parse(text) } catch {}
-    return { ok: r.ok, status: r.status, data, text: data ? null : text.slice(0, 1000) }
+    return { ok: r.ok, status: r.status, data, text: data ? null : text.slice(0, 2000) }
   }, { url: LINK_URL, itemId: product.id, productUrl: product.url, tag: AFFILIATE_TAG })
 }
 
@@ -277,17 +300,21 @@ async function main() {
 
   let linksCreated = 0
   if (GENERATE_LINKS) {
-    console.log(`[Mavuri] Geração de links ATIVA; máximo ${MAX_LINKS} nesta execução.`)
-    for (const p of changed) {
-      if (linksCreated >= MAX_LINKS || p.affiliate_url) continue
+    const linkCandidates = products.filter(p => p.id && p.url && !p.affiliate_url)
+    console.log(`[Mavuri] Geração de links ATIVA; máximo ${MAX_LINKS} nesta execução; candidatos sem link: ${linkCandidates.length}.`)
+    for (const p of linkCandidates) {
+      if (linksCreated >= MAX_LINKS) break
       const result = await generateLink(page, p)
       p.affiliate_link_status = result.status
-      if (result.ok) {
-        p.affiliate_url = result.data?.short_url || result.data?.shortUrl || result.data?.url || result.data?.affiliate_url || null
-        if (p.affiliate_url) {
-          state.products[key(p)].affiliate_url = p.affiliate_url
-          linksCreated++
-        }
+      const affiliateUrl = result.ok
+        ? (result.data?.short_url || result.data?.shortUrl || result.data?.url || result.data?.affiliate_url || findAffiliateUrl(result.data))
+        : null
+      if (affiliateUrl) {
+        p.affiliate_url = affiliateUrl
+        state.products[key(p)].affiliate_url = affiliateUrl
+        linksCreated++
+      } else if (result.status) {
+        console.log(`[Mavuri] Link não obtido para ${p.id}: HTTP ${result.status} ${JSON.stringify(result.data || result.text || "").slice(0, 500)}`)
       }
     }
   } else {
