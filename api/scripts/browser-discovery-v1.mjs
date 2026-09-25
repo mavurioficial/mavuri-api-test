@@ -21,6 +21,7 @@ const GENERATE_LINKS = /^(1|true|yes)$/i.test(process.env.MAVURI_GENERATE_AFFILI
 const MAX_LINKS = Math.max(1, Number(process.env.MAVURI_MAX_NEW_LINKS || 10))
 const AFFILIATE_TAG = process.env.MAVURI_AFFILIATE_TAG || null
 const AUTO_INGEST = /^(1|true|yes)$/i.test(process.env.MAVURI_AUTO_INGEST || "false")
+const AFFILIATE_ACCOUNT_ID = process.env.MAVURI_AFFILIATE_ACCOUNT_ID || null
 const MAVURI_APP_URL = process.env.MAVURI_APP_URL || "https://mavurioficial.github.io/affiliate-engine/"
 
 function parseJson(name, fallback) {
@@ -130,6 +131,7 @@ async function ingestToMavuri(page, offers) {
   if (!offers.length) return { ok: true, status: 200, data: { received: 0 } }
 
   await page.goto(MAVURI_APP_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {})
+  await page.evaluate((accountId) => { window.__MAVURI_DISCOVERY_ACCOUNT_ID = accountId }, AFFILIATE_ACCOUNT_ID)
 
   let appAuth = false
   for (let i = 0; i < 90; i++) {
@@ -174,6 +176,7 @@ async function ingestToMavuri(page, offers) {
       window.postMessage({
         type: "mavuri.discovery.ingest",
         requestId,
+        affiliate_account_id: window.__MAVURI_DISCOVERY_ACCOUNT_ID || null,
         offers
       }, window.location.origin)
     })
@@ -335,6 +338,7 @@ async function main() {
 
   if (AUTO_INGEST) {
     console.log(`[Mavuri] Ingest automático ATIVO: enviando ${products.length} oferta(s) ao Flow.`)
+    if (AFFILIATE_ACCOUNT_ID) console.log(`[Mavuri] Conta de afiliado explícita: ${AFFILIATE_ACCOUNT_ID}`)
     const ingest = await ingestToMavuri(page, products)
     console.log(`[Mavuri] Ingest HTTP ${ingest.status}`)
     if (!ingest.ok) {
