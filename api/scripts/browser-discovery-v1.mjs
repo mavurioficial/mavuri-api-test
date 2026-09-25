@@ -20,6 +20,8 @@ const OUTPUT_FILE = process.env.MAVURI_DISCOVERY_OUTPUT || String.raw`${PROFILE_
 const GENERATE_LINKS = /^(1|true|yes)$/i.test(process.env.MAVURI_GENERATE_AFFILIATE_LINKS || "false")
 const MAX_LINKS = Math.max(1, Number(process.env.MAVURI_MAX_NEW_LINKS || 10))
 const AFFILIATE_TAG = process.env.MAVURI_AFFILIATE_TAG || null
+const AUTO_INGEST = /^(1|true|yes)$/i.test(process.env.MAVURI_AUTO_INGEST || "false")
+const MAVURI_APP_URL = process.env.MAVURI_APP_URL || "https://mavurioficial.github.io/affiliate-engine/"
 
 function parseJson(name, fallback) {
   if (!process.env[name]) return fallback
@@ -116,6 +118,45 @@ function normalize(card) {
 function key(p) { return p.id || p.product_id || p.url || p.title }
 function snapshot(p) {
   return JSON.stringify([p.id, p.product_id, p.price, p.previous_price, p.discount, p.coupon, p.extra_commission])
+}
+
+async function ingestToMavuri(page, offers) {
+  if (!offers.length) return { ok: true, status: 200, data: { received: 0 } }
+
+  await page.goto(MAVURI_APP_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {})
+  await sleep(1500)
+
+  return page.evaluate(async (offers) => {
+    const requestId = `discovery-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener("message", onMessage)
+        resolve({ ok: false, status: 504, error: "O Mavuri não respondeu ao bridge de discovery em 60 segundos." })
+      }, 60000)
+
+      function onMessage(event) {
+        if (event.source !== window || event.origin !== window.location.origin) return
+        const message = event.data
+        if (!message || message.type !== "mavuri.discovery.ingest.result" || message.requestId !== requestId) return
+        clearTimeout(timer)
+        window.removeEventListener("message", onMessage)
+        resolve({
+          ok: message.ok === true,
+          status: message.ok === true ? 200 : 422,
+          data: message.data || null,
+          error: message.error || null
+        })
+      }
+
+      window.addEventListener("message", onMessage)
+      window.postMessage({
+        type: "mavuri.discovery.ingest",
+        requestId,
+        offers
+      }, window.location.origin)
+    })
+  }, offers)
 }
 
 async function loadState() {
@@ -243,6 +284,18 @@ async function main() {
 
   await save(STATE_FILE, state)
   await save(OUTPUT_FILE, output)
+
+  if (AUTO_INGEST) {
+    console.log(`[Mavuri] Ingest automático ATIVO: enviando ${products.length} oferta(s) ao Flow.`)
+    const ingest = await ingestToMavuri(page, products)
+    console.log(`[Mavuri] Ingest HTTP ${ingest.status}`)
+    if (!ingest.ok) {
+      throw new Error(`Ingest do Flow falhou: ${ingest.error || JSON.stringify(ingest.data || {})}`)
+    }
+    console.log(`[Mavuri] Flow recebeu ${ingest.data?.received ?? products.length}; criadas=${ingest.data?.created ?? 0}; atualizadas=${ingest.data?.updated ?? 0}; jobs=${ingest.data?.jobs_created ?? 0}`)
+  } else {
+    console.log("[Mavuri] Ingest automático desativado. Para ativar: MAVURI_AUTO_INGEST=true")
+  }
 
   console.log("")
   console.log("======================================================")
