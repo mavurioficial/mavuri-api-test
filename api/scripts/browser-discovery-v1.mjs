@@ -89,7 +89,7 @@ function component(card, type) {
 
 function absUrl(value) {
   if (!value) return null
-  return /^https?:\\/\\//i.test(value) ? value : `https://${value}`
+  return value.startsWith("http://") || value.startsWith("https://") ? value : `https://${value}`
 }
 
 function normalize(card) {
