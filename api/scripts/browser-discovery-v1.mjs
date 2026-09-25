@@ -19,6 +19,7 @@ const STATE_FILE = process.env.MAVURI_DISCOVERY_STATE || String.raw`${PROFILE_DI
 const OUTPUT_FILE = process.env.MAVURI_DISCOVERY_OUTPUT || String.raw`${PROFILE_DIR}/mavuri-discovery-latest.json`
 const GENERATE_LINKS = /^(1|true|yes)$/i.test(process.env.MAVURI_GENERATE_AFFILIATE_LINKS || "false")
 const MAX_LINKS = Math.max(1, Number(process.env.MAVURI_MAX_NEW_LINKS || 10))
+const LINK_MIN_DISCOUNT = Math.max(0, Number(process.env.MAVURI_LINK_MIN_DISCOUNT || 0))
 const AFFILIATE_TAG = process.env.MAVURI_AFFILIATE_TAG || null
 const AUTO_INGEST = /^(1|true|yes)$/i.test(process.env.MAVURI_AUTO_INGEST || "false")
 const AFFILIATE_ACCOUNT_ID = process.env.MAVURI_AFFILIATE_ACCOUNT_ID || null
@@ -303,8 +304,8 @@ async function main() {
 
   let linksCreated = 0
   if (GENERATE_LINKS) {
-    const linkCandidates = products.filter(p => p.id && p.url && !p.affiliate_url)
-    console.log(`[Mavuri] Geração de links ATIVA; máximo ${MAX_LINKS} nesta execução; candidatos sem link: ${linkCandidates.length}.`)
+    const linkCandidates = products.filter(p => p.id && p.url && !p.affiliate_url && (p.discount ?? 0) >= LINK_MIN_DISCOUNT)
+    console.log(`[Mavuri] Geração de links ATIVA; máximo ${MAX_LINKS} nesta execução; desconto mínimo: ${LINK_MIN_DISCOUNT}%; candidatos elegíveis: ${linkCandidates.length}.`)
     for (const p of linkCandidates) {
       if (linksCreated >= MAX_LINKS) break
       const result = await generateLink(page, p)
