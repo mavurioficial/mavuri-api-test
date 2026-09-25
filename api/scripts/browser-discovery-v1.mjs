@@ -107,14 +107,20 @@ function normalize(card) {
   const title = component(card, "title")
   const price = component(card, "price")
   const picture = component(card, "picture") || component(card, "image")
+  const currentPrice = numericValue(price?.current_price?.value)
+  const previousPrice = numericValue(price?.previous_price?.value)
+  const explicitDiscount = numericValue(price?.discount ?? price?.discount_label?.text)
+  const derivedDiscount = currentPrice != null && previousPrice != null && previousPrice > currentPrice
+    ? Math.round(((previousPrice - currentPrice) / previousPrice) * 100)
+    : null
   return {
     id: m.id || null,
     product_id: m.product_id || null,
     type: m.type || null,
     title: title?.text || null,
-    price: price?.current_price?.value ?? null,
-    previous_price: price?.previous_price?.value ?? null,
-    discount: numericValue(price?.discount ?? price?.discount_label?.text),
+    price: currentPrice,
+    previous_price: previousPrice,
+    discount: explicitDiscount ?? derivedDiscount,
     coupon: price?.coupon_label?.text || null,
     url: absUrl(m.url),
     image_url: picture?.url || picture?.src || null,
