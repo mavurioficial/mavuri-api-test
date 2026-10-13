@@ -42,6 +42,8 @@ Abra `Settings → Secrets and variables → Actions` neste repositório.
 
 ## 3. Testar antes de permitir criação
 
+Execute primeiro a consulta normal em Actions com a opção **Validar permissao PLAN sem criar VM** desmarcada. Depois, com `ENABLE_APPLY=false`, execute manualmente o workflow mais uma vez **marcando** a opção `verify_plan`. Ela cria somente um Job PLAN na Stack, valida que o plano contém exatamente uma VM A1 Flex (1 OCPU/4 GB) e **nunca solicita Apply**, mesmo se `ENABLE_APPLY=true` por engano. Caso a configuração Terraform baixada da Stack não coincida com a assinatura aprovada, a execução é interrompida antes do Plan e do Apply para revisão.
+
 Na aba **Actions**, abra **Mavuri | Capacidade Oracle ARM** e clique em **Run workflow**. Espere o resultado. Se a capacidade estiver esgotada, deve aparecer `OUT_OF_HOST_CAPACITY`, sem Terraform Apply.
 
 Só depois de conferir autenticação, políticas, Stack e execução em modo consulta, altere `ENABLE_APPLY` para `true`, e acompanhe o próximo Job.
