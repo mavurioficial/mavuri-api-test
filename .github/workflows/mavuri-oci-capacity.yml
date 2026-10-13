@@ -1,0 +1,51 @@
+name: Mavuri | Capacidade Oracle ARM
+
+on:
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mavuri-oci-capacity-watcher
+  cancel-in-progress: false
+
+jobs:
+  check-capacity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    env:
+      OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+      OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY_PEM }}
+      OCI_STACK_OCID: ${{ vars.OCI_STACK_OCID }}
+      OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+      ENABLE_APPLY: ${{ vars.ENABLE_APPLY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Executar testes de seguranca
+        run: python -m unittest discover -s oracle-watcher/scripts -p 'test_*.py' -v
+      - name: Validar configuracao
+        id: secrets-check
+        shell: bash
+        run: |
+          if [[ -n "$OCI_USER_OCID" && -n "$OCI_TENANCY_OCID" && -n "$OCI_FINGERPRINT" && -n "$OCI_PRIVATE_KEY_PEM" && -n "$OCI_STACK_OCID" && -n "$OCI_COMPARTMENT_OCID" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "OCI nao configurada: consulta e Apply desativados."
+          fi
+      - name: Instalar SDK Oracle
+        if: steps.secrets-check.outputs.ready == 'true'
+        run: pip install -r oracle-watcher/requirements.txt
+      - name: Consultar capacidade e provisionar apenas se autorizado
+        if: steps.secrets-check.outputs.ready == 'true'
+        run: python oracle-watcher/scripts/watcher.py
