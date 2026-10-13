@@ -82,6 +82,7 @@ def main():
     if not sid.startswith("ocid1.ormstack.oc1.sa-saopaulo-1."):
         raise RuntimeError("Stack id/region mismatch")
     enabled = os.environ.get("ENABLE_APPLY", "false").lower() == "true"
+    verify_plan_only = os.environ.get("VERIFY_PLAN_ONLY", "false").lower() == "true"
 
     fd, key_file = tempfile.mkstemp(prefix="oci-key-", suffix=".pem")
     try:
@@ -103,8 +104,9 @@ def main():
         stack = rm.get_stack(sid).data
         if stack.compartment_id != compartment or stack.display_name != INSTANCE:
             raise RuntimeError("Wrong stack name or compartment")
-        if enabled:
-            check_terraform(rm.get_stack_tf_config(sid).data)
+        if enabled or verify_plan_only:
+            config_zip = rm.get_stack_tf_config(sid).data
+            check_terraform(config_zip)
             record("Terraform configuration signature verified.")
 
         def instances():
@@ -118,6 +120,21 @@ def main():
         jobs = oci.pagination.list_call_get_all_results(rm.list_jobs, stack_id=sid).data
         if any(j.lifecycle_state in ACTIVE for j in jobs):
             record("Existing active Terraform job; no action.")
+            return
+
+        if verify_plan_only:
+            record("MANUAL VERIFICATION — Terraform Plan only; Apply is disabled.")
+            p = oci.resource_manager.models.CreateJobDetails(
+                stack_id=sid,
+                job_operation_details=oci.resource_manager.models.CreatePlanJobOperationDetails(),
+                display_name="mavuri-oci-permissions-check")
+            plan_id = rm.create_job(p).data.id
+            record("Created non-provisioning PLAN job: " + plan_id)
+            if wait_job(rm, plan_id) != "SUCCEEDED":
+                raise RuntimeError("Terraform Plan failed: " + plan_id)
+            plan_log = binary(rm.get_job_logs_content(plan_id).data).decode("utf-8", "replace")
+            check_plan(plan_log)
+            record("Safe PLAN verified: 1 ARM VM; 0 change; 0 destroy. No Apply was made.")
             return
 
         details = oci.core.models.CreateComputeCapacityReportDetails(
