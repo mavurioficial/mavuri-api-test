@@ -103,8 +103,9 @@ def main():
         stack = rm.get_stack(sid).data
         if stack.compartment_id != compartment or stack.display_name != INSTANCE:
             raise RuntimeError("Wrong stack name or compartment")
-        check_terraform(rm.get_stack_tf_config(sid).data)
-        record("Terraform configuration signature verified.")
+        if enabled:
+            check_terraform(rm.get_stack_tf_config(sid).data)
+            record("Terraform configuration signature verified.")
 
         def instances():
             return oci.pagination.list_call_get_all_results(
