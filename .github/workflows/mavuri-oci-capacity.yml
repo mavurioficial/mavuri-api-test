@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '17 */2 * * *'
   workflow_dispatch:
+    inputs:
+      verify_plan:
+        description: 'Validar permissao PLAN sem criar VM (nao executa APPLY)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,6 +30,7 @@ jobs:
       OCI_STACK_OCID: ${{ vars.OCI_STACK_OCID }}
       OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
       ENABLE_APPLY: ${{ vars.ENABLE_APPLY }}
+      VERIFY_PLAN_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_plan == true }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
