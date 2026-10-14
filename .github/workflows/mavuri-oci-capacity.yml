@@ -2,11 +2,11 @@ name: Mavuri | Capacidade Oracle ARM
 
 on:
   schedule:
-    - cron: '17 */2 * * *'
+    - cron: '3,18,33,48 * * * *'
   workflow_dispatch:
     inputs:
-      verify_plan:
-        description: 'Validar permissao PLAN sem criar VM (nao executa APPLY)'
+      test_telegram:
+        description: 'Enviar mensagem TESTE ao Telegram (sem consultar a Oracle)'
         required: false
         type: boolean
         default: false
@@ -21,7 +21,7 @@ concurrency:
 jobs:
   check-capacity:
     runs-on: ubuntu-latest
-    timeout-minutes: 14
+    timeout-minutes: 10
     env:
       OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
       OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
@@ -30,7 +30,9 @@ jobs:
       OCI_STACK_OCID: ${{ vars.OCI_STACK_OCID }}
       OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
       ENABLE_APPLY: ${{ vars.ENABLE_APPLY }}
-      VERIFY_PLAN_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_plan == true }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.MAVURI_ARM_TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.MAVURI_ARM_TELEGRAM_CHAT_ID }}
+      TEST_TELEGRAM: ${{ github.event_name == 'workflow_dispatch' && inputs.test_telegram == true }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,21 +40,40 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Executar testes de seguranca
+      - name: Testar regras do monitor
         run: python -m unittest discover -s oracle-watcher/scripts -p 'test_*.py' -v
       - name: Validar configuracao
-        id: secrets-check
+        id: config
         shell: bash
         run: |
-          if [[ -n "$OCI_USER_OCID" && -n "$OCI_TENANCY_OCID" && -n "$OCI_FINGERPRINT" && -n "$OCI_PRIVATE_KEY_PEM" && -n "$OCI_STACK_OCID" && -n "$OCI_COMPARTMENT_OCID" ]]; then
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Telegram ainda nao configurado: nenhuma notificacao sera enviada."
+          elif [[ "$TEST_TELEGRAM" == "true" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$OCI_USER_OCID" && -n "$OCI_TENANCY_OCID" && -n "$OCI_FINGERPRINT" && -n "$OCI_PRIVATE_KEY_PEM" && -n "$OCI_STACK_OCID" && -n "$OCI_COMPARTMENT_OCID" ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "OCI nao configurada: consulta e Apply desativados."
+            echo "OCI incompleta; monitoramento nao iniciado."
           fi
       - name: Instalar SDK Oracle
-        if: steps.secrets-check.outputs.ready == 'true'
+        if: steps.config.outputs.ready == 'true' && env.TEST_TELEGRAM != 'true'
         run: pip install -r oracle-watcher/requirements.txt
-      - name: Consultar capacidade e provisionar apenas se autorizado
-        if: steps.secrets-check.outputs.ready == 'true'
+      - name: Recuperar historico de alertas
+        if: steps.config.outputs.ready == 'true' && env.TEST_TELEGRAM != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: oracle-watcher/.capacity-alert-state.json
+          key: mavuri-arm-alert-state-${{ github.run_id }}
+          restore-keys: |
+            mavuri-arm-alert-state-
+      - name: Monitorar disponibilidade (sem PLAN nem APPLY)
+        if: steps.config.outputs.ready == 'true'
         run: python oracle-watcher/scripts/watcher.py
+      - name: Salvar historico para evitar alertas repetidos
+        if: success() && steps.config.outputs.ready == 'true' && env.TEST_TELEGRAM != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: oracle-watcher/.capacity-alert-state.json
+          key: mavuri-arm-alert-state-${{ github.run_id }}
