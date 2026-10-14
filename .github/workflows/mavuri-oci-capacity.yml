@@ -2,7 +2,7 @@ name: Mavuri | Capacidade Oracle ARM
 
 on:
   schedule:
-    - cron: '3,18,33,48 * * * *'
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
     inputs:
       test_telegram:
