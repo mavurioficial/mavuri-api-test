@@ -1,59 +1,46 @@
-# Mavuri — Monitor de capacidade Oracle ARM
+# Mavuri — Monitor Oracle ARM + alerta privado no Telegram
 
-Este módulo está isolado do restante de `mavuri-api-test` e usa o GitHub Actions para verificar, a cada 2 horas, a capacidade da instância **VM.Standard.A1.Flex (1 OCPU, 4 GB RAM)** em São Paulo. O computador do usuário pode permanecer desligado.
+O workflow GitHub Actions consulta a capacidade para **VM.Standard.A1.Flex (1 OCPU, 4 GB RAM)** em **São Paulo, AD1**, a cada **15 minutos** (minutos 03, 18, 33 e 48 de cada hora). O GitHub pode atrasar ou suspender agendamentos.
 
-## Estado inicial
+**Somente consulta e notificação.** Este código não executa PLAN, APPLY, não lança instâncias nem cria rede ou disco. A criação da VM é manual na Oracle. ENABLE_APPLY deve permanecer false; se for diferente disso, o monitor para por segurança.
 
-- O workflow `.github/workflows/mavuri-oci-capacity.yml` está no repositório público.
-- **Sem credenciais:** os testes locais rodam; nenhuma consulta ou Apply é feito na Oracle.
-- **Com credenciais e `ENABLE_APPLY=false`:** consultas de capacidade, sem Apply.
-- **Com `ENABLE_APPLY=true`:** quando há capacidade, valida configuração SHA256 da Stack, ausência de VM existente, Jobs ativos, gera um Plan novo, exige *exatamente* uma VM A1 Flex 1 OCPU/4 GB e nenhum update/destroy; só então solicita um Apply a partir do plano validado.
-- A configuração Terraform aprovada é identificada pelo SHA256 `edea25ba2af70f47a085861b217b6f56884b1b8034cf9e213154793ecd8aab57`.
-- Isso **não garante capacidade**, nem dispensa verificação de cobrança/limites Always Free.
+## Configuração existente no GitHub
 
-## 1. Criar uma identidade Oracle dedicada
+Em Settings → Secrets and variables → Actions, já devem estar cadastrados:
 
-Na Oracle Cloud, em **Identity & Security → Domains → Default → Users**, crie um usuário de automação, sem privilégios de administrador. Crie um grupo separado para ele e uma chave **API Signing Key** (diferente da chave SSH do Ubuntu).
+**Secrets OCI:** OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_PRIVATE_KEY_PEM.
 
-Não envie chaves privadas neste chat ou para o código público. Guarde a PEM privada somente no **GitHub Actions Repository Secrets**.
+**Variables:** OCI_STACK_OCID (Stack mavuri-waha), OCI_COMPARTMENT_OCID (root) e ENABLE_APPLY (false).
 
-### Políticas IAM
+## 1. Configurar bot privado para alertas
 
-O usuário precisará de permissões mínimas para consultar relatórios e ler recursos, e de permissão de gerenciamento de Jobs, restrita aos Jobs PLAN/APPLY da Stack específica. As instruções definitivas devem ser testadas na tenancy, pois os detalhes do IAM dependem do domínio/compartimento; **não conceda Administrator, nem permissão DESTROY**.
+Crie preferencialmente um bot Telegram exclusivo para alertas Oracle, separado do bot de ofertas, em [@BotFather](https://t.me/BotFather) usando /newbot. Não divulgue o token em prints, código ou nesta conversa.
 
-Documentação oficial:
-- [Core services IAM](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/corepolicyreference.htm)
-- [Resource Manager IAM](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/resourcemanagerpolicyreference.htm)
+Inicie conversa privada com o bot e envie /start. Descubra o chat ID numérico da conversa usando o método getUpdates da Bot API; evite compartilhar o URL que contém seu token ou a resposta completa.
 
-## 2. Adicionar Secrets e Variables no GitHub
+Cadastre **dois Repository Secrets** no GitHub:
+- MAVURI_ARM_TELEGRAM_BOT_TOKEN: token do novo bot.
+- MAVURI_ARM_TELEGRAM_CHAT_ID: ID numérico da conversa privada.
 
-Abra `Settings → Secrets and variables → Actions` neste repositório.
+O workflow só executa as consultas quando os secrets Telegram e Oracle estiverem configurados.
 
-**Secrets (não compartilhe os valores aqui):**
-- `OCI_USER_OCID` — OCID do usuário de automação.
-- `OCI_TENANCY_OCID` — OCID da tenancy Oracle.
-- `OCI_FINGERPRINT` — fingerprint da chave de API.
-- `OCI_PRIVATE_KEY_PEM` — conteúdo completo da chave privada PEM de API.
+## 2. Enviar teste de mensagem
 
-**Variables:**
-- `OCI_STACK_OCID` — OCID da Stack `mavuri-waha`.
-- `OCI_COMPARTMENT_OCID` — OCID da tenancy root (igual a `OCI_TENANCY_OCID`).
-- `ENABLE_APPLY` — `false` no primeiro teste.
+GitHub → Actions → Mavuri | Capacidade Oracle ARM → Run workflow.
+Escolha main; marque **Enviar mensagem TESTE ao Telegram** e execute.
 
-## 3. Testar antes de permitir criação
+O teste envia mensagem contendo TESTE e não consulta nem altera a Oracle. Se não chegar, revise token, chat ID e se o bot recebeu /start.
 
-Execute primeiro a consulta normal em Actions com a opção **Validar permissao PLAN sem criar VM** desmarcada. Depois, com `ENABLE_APPLY=false`, execute manualmente o workflow mais uma vez **marcando** a opção `verify_plan`. Ela cria somente um Job PLAN na Stack, valida que o plano contém exatamente uma VM A1 Flex (1 OCPU/4 GB) e **nunca solicita Apply**, mesmo se `ENABLE_APPLY=true` por engano. Caso a configuração Terraform baixada da Stack não coincida com a assinatura aprovada, a execução é interrompida antes do Plan e do Apply para revisão.
+## 3. Monitoramento automático
 
-Na aba **Actions**, abra **Mavuri | Capacidade Oracle ARM** e clique em **Run workflow**. Espere o resultado. Se a capacidade estiver esgotada, deve aparecer `OUT_OF_HOST_CAPACITY`, sem Terraform Apply.
+O workflow roda a cada 15 minutos, sujeito à fila do GitHub. Só notifica quando a Oracle reportar AVAILABLE com uma vaga ou contagem de vagas não informada. O aviso contém link para a Stack da Oracle e instrução para tentar criar manualmente a VM. Se a VM já existir, não há alerta.
 
-Só depois de conferir autenticação, políticas, Stack e execução em modo consulta, altere `ENABLE_APPLY` para `true`, e acompanhe o próximo Job.
+Para evitar spam, o histórico de alertas é armazenado pelo GitHub Actions Cache: um alerta em até seis horas enquanto disponível, com possibilidade de notificar em transições após intervalo mínimo de uma hora. O GitHub pode remover caches, portanto não é garantia absoluta contra repetição.
 
-## Segurança e despesas
+O relatório de capacidade não reserva a máquina e pode mudar rapidamente.
 
-- O código contém **nenhuma chave de acesso ou segredo**.
-- Workflow em repositório público usa runners padrão GitHub gratuitos; não troque para runners maiores sem avaliar custos.
-- VM ARM A1 do modelo configurado está dentro da franquia de computação Always Free; demais limites de storage e recursos são compartilhados na tenancy. Configure alertas de orçamento e não faça upgrade para plano pago sem revisar.
-- Desative a criação a qualquer momento com `ENABLE_APPLY=false`.
-- O agendamento do GitHub não é um SLA: pode atrasar e pode ser suspenso após inatividade.
-- Um relatório de capacidade `AVAILABLE` não reserva host; a tentativa de Apply pode novamente falhar.
-- A conta API da automação deve ser exclusiva e ter IAM restrito. Um token roubado poderia ser usado independentemente das proteções do script se a permissão IAM for excessiva.
+## 4. Segurança IAM
+
+A política mavuri-oracle-watcher-apply não é mais necessária. Revogue/remova as permissões PLAN/APPLY de gerenciamento de Jobs antes de usar o monitor em definitivo. A política mavuri-oracle-watcher-read já permite a consulta da Stack, existência da VM e capacidade ARM. O monitor não necessita de manage orm-jobs.
+
+Não envie credenciais ou arquivos PEM por chat. Ao criar a VM manualmente, confira previamente a franquia Always Free e limites de armazenamento/disco. O monitor nunca envia pedido de criação.
