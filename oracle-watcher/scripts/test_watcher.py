@@ -1,50 +1,59 @@
-import io
-import zipfile
+"""Offline tests for the Mavuri read-only Oracle ARM monitor."""
+import json
+import sys
+import tempfile
 import unittest
 from pathlib import Path
-import sys
+from unittest.mock import patch
+
 sys.path.insert(0, str(Path(__file__).parent))
-from watcher import check_plan, check_terraform
+import watcher
 
-PLAN = """
-# oci_core_instance.generated_oci_core_instance will be created
-+ resource "oci_core_instance" "generated_oci_core_instance" {
-+ availability_domain = "KYUE:SA-SAOPAULO-1-AD-1"
-+ shape = "VM.Standard.A1.Flex"
-+ create_vnic_details {
-+ assign_public_ip = "true"
-+ subnet_id = "ocid1.subnet.oc1.sa-saopaulo-1.fake"
-+ }
-+ shape_config {
-+ memory_in_gbs = 4
-+ ocpus = 1
-+ }
-+ }
-Plan: 1 to add, 0 to change, 0 to destroy.
-"""
 
-class Tests(unittest.TestCase):
-    def test_safe(self): check_plan(PLAN)
-    def test_other_cpu(self):
-        with self.assertRaises(RuntimeError): check_plan(PLAN.replace("ocpus = 1","ocpus = 2"))
-    def test_decimal_cpu(self):
-        with self.assertRaises(RuntimeError): check_plan(PLAN.replace("ocpus = 1","ocpus = 1.5"))
-    def test_other_memory(self):
-        with self.assertRaises(RuntimeError): check_plan(PLAN.replace("memory_in_gbs = 4","memory_in_gbs = 8"))
-    def test_other_shape(self):
-        with self.assertRaises(RuntimeError): check_plan(PLAN.replace("VM.Standard.A1.Flex","VM.Standard.E4.Flex"))
-    def test_no_public_ip(self):
-        with self.assertRaises(RuntimeError): check_plan(PLAN.replace('assign_public_ip = "true"','assign_public_ip = "false"'))
-    def test_wrong_region(self):
-        with self.assertRaises(RuntimeError): check_plan(PLAN.replace("KYUE:SA-SAOPAULO-1-AD-1","SOME-OTHER-AD"))
-    def test_destroy(self):
-        with self.assertRaises(RuntimeError): check_plan(PLAN.replace("0 to destroy","1 to destroy"))
-    def test_extra_resource(self):
-        with self.assertRaises(RuntimeError): check_plan(PLAN.replace("Plan: 1", "# oci_core_volume.fake will be created\nPlan: 1"))
-    def test_wrong_terraform(self):
-        b=io.BytesIO()
-        with zipfile.ZipFile(b,"w") as z: z.writestr("main.tf","different code")
-        with self.assertRaises(RuntimeError): check_terraform(b.getvalue())
+class CapacityTests(unittest.TestCase):
+    def test_available(self):
+        self.assertTrue(watcher.capacity_available("AVAILABLE", 1))
+        self.assertTrue(watcher.capacity_available("AVAILABLE", None))
+        self.assertFalse(watcher.capacity_available("OUT_OF_HOST_CAPACITY", None))
+        self.assertFalse(watcher.capacity_available("AVAILABLE", 0))
+        self.assertFalse(watcher.capacity_available("UNKNOWN", 2))
+
+    def test_first_alert(self):
+        self.assertTrue(watcher.should_notify({}, 100000))
+
+    def test_no_repeated_alert_on_each_check(self):
+        self.assertFalse(watcher.should_notify(
+            {"available": True, "last_sent_at": 99900}, 100000))
+        self.assertTrue(watcher.should_notify(
+            {"available": True, "last_sent_at": 100000 - 7 * 3600}, 100000))
+
+    def test_return_after_downtime(self):
+        self.assertFalse(watcher.should_notify(
+            {"available": False, "last_sent_at": 100000 - 1800}, 100000))
+        self.assertTrue(watcher.should_notify(
+            {"available": False, "last_sent_at": 100000 - 3600}, 100000))
+
+    def test_state_roundtrip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            with patch.object(watcher, "STATE_FILE", path):
+                self.assertEqual(watcher.load_state(), {})
+                watcher.save_state({"available": True, "last_sent_at": 123})
+                self.assertEqual(watcher.load_state()["last_sent_at"], 123)
+                self.assertTrue(json.loads(path.read_text())["available"])
+
+    def test_alert_says_manual(self):
+        msg = watcher.notification_text(None)
+        self.assertIn("manualmente", msg)
+        self.assertIn("nao esta reservada", msg)
+        self.assertIn("1 OCPU / 4 GB", msg)
+
+    def test_provisioning_not_present(self):
+        content = Path(watcher.__file__).read_text(encoding="utf-8")
+        for forbidden in ("rm.create_job(", "CreateApplyJobOperationDetails(",
+                          "CreatePlanJobOperationDetails(", "compute.launch_instance("):
+            self.assertNotIn(forbidden, content)
+
 
 if __name__ == "__main__":
     unittest.main()
