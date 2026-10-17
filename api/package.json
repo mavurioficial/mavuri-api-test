@@ -1,1 +1,17 @@
-{"name":"mavuri-api-test","version":"1.1.0","private":true,"description":"Resolver serverless do Mercado Livre usado pelo Mavuri Flow","engines":{"node":"24.x"}}
+{
+  "name": "mavuri-api-test",
+  "version": "1.3.0-discovery",
+  "private": true,
+  "description": "Resolver serverless do Mercado Livre usado pelo Mavuri Flow + Local Chrome Discovery Worker",
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  },
+  "scripts": {
+    "browser:worker": "node scripts/browser-worker-local.mjs",
+    "browser:discover": "node scripts/browser-discovery-v1.mjs",
+    "browser:runner": "node scripts/browser-discovery-runner-local.mjs"
+  }
+}
